@@ -1,0 +1,8 @@
+target/
+dist/
+frontend/dist/
+.DS_Store
+.env
+.direnv/
+result
+result-*

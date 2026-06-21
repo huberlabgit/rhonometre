@@ -1,0 +1,708 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f4;
+  --panel: #ffffff;
+  --ink: #17211d;
+  --muted: #61706a;
+  --line: #dce3de;
+  --teal: #0f766e;
+  --teal-soft: #d9f4ef;
+  --blue: #2563eb;
+  --amber: #b7791f;
+  --red: #b42318;
+  --green: #2f7d46;
+  --shadow: 0 14px 45px rgba(25, 38, 34, 0.10);
+  --plot-left-inset: 90px;
+  --plot-top-inset: 0px;
+  --plot-bottom-inset: 0px;
+  --plot-grid-line: rgba(97, 112, 106, 0.24);
+  --plot-cursor-line: rgba(23, 33, 29, 0.52);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    linear-gradient(180deg, rgba(15, 118, 110, 0.10), rgba(15, 118, 110, 0) 280px),
+    var(--bg);
+  color: var(--ink);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+a {
+  color: var(--teal);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.app-shell {
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0 24px;
+}
+
+.topbar h1,
+.station-heading h2,
+.chart-heading h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.topbar h1 {
+  font-size: clamp(2.1rem, 6vw, 4.25rem);
+  line-height: 0.95;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 46px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.segmented button,
+.refresh-button {
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.segmented button.active {
+  background: var(--teal);
+  color: #ffffff;
+}
+
+.refresh-button {
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.refresh-button:hover,
+.station-tab:hover {
+  border-color: rgba(15, 118, 110, 0.45);
+}
+
+.dashboard {
+  display: grid;
+  gap: 18px;
+}
+
+.source-strip,
+.station-panel,
+.empty-state,
+.notice {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow);
+}
+
+.source-strip {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.source-strip > div {
+  display: grid;
+  gap: 2px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cache,
+.loading-text,
+.status-pill,
+.kind {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.cache.fresh,
+.status-pill.complete {
+  background: #e7f6ec;
+  color: var(--green);
+}
+
+.cache.stale,
+.status-pill.partial {
+  background: #fff3d6;
+  color: var(--amber);
+}
+
+.status-pill.missing,
+.error-text {
+  color: var(--red);
+}
+
+.loading-text {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+
+.notice {
+  padding: 12px 16px;
+  color: var(--muted);
+}
+
+.notice p {
+  margin: 4px 0;
+}
+
+.station-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.station-tab {
+  display: grid;
+  gap: 8px;
+  min-height: 124px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.station-tab.active {
+  border-color: var(--teal);
+  box-shadow: inset 0 0 0 2px rgba(15, 118, 110, 0.16);
+}
+
+.station-tab strong {
+  line-height: 1.15;
+}
+
+.station-tab small,
+.chart-heading small,
+.plot-current small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.kind {
+  padding: 0 8px;
+  min-height: 22px;
+}
+
+.kind.river {
+  background: #e4efff;
+  color: var(--blue);
+}
+
+.kind.lake {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+
+.station-panel {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.station-heading,
+.chart-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.station-heading h2 {
+  font-size: clamp(1.45rem, 4vw, 2.2rem);
+  line-height: 1.05;
+}
+
+.station-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #f0d394;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #604000;
+}
+
+.station-notice strong {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.station-notice span {
+  color: #72500b;
+  line-height: 1.35;
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.range-row.subtle {
+  padding-top: 0;
+  border-top: 0;
+  color: var(--muted);
+}
+
+.chart-stack {
+  position: relative;
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.chart-card {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 6px;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid rgba(220, 227, 222, 0.72);
+  min-width: 0;
+}
+
+.stack-time-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
+  gap: 16px;
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.stack-time-grid-plot {
+  position: relative;
+  min-width: 0;
+  margin-left: var(--plot-left-inset);
+}
+
+.stack-grid-line,
+.stack-hover-grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-50%);
+}
+
+.stack-grid-line {
+  width: 1px;
+  background: var(--plot-grid-line);
+}
+
+.stack-hover-grid-line {
+  width: 2px;
+  background: var(--plot-cursor-line);
+}
+
+.chart-card.discharge {
+  order: 1;
+  box-shadow: inset 4px 0 0 var(--blue);
+}
+
+.chart-card.level {
+  order: 4;
+  box-shadow: inset 4px 0 0 var(--teal);
+}
+
+.chart-card.temperature {
+  order: 3;
+  box-shadow: inset 4px 0 0 var(--amber);
+}
+
+.chart-heading h3 {
+  font-size: 0.95rem;
+}
+
+.forecast-summary {
+  display: block;
+  margin-top: 3px;
+}
+
+.chart-heading small:not(.forecast-summary) {
+  display: none;
+}
+
+.chart-heading > span {
+  color: var(--muted);
+  font-weight: 900;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.plot-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.chart-frame {
+  position: relative;
+  width: 100%;
+  height: clamp(180px, 21vw, 245px);
+  min-width: 0;
+  min-height: 0;
+}
+
+.chart-frame ._chartistry,
+.chart-frame svg {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+
+.chart-frame ._chartistry {
+  position: relative;
+  z-index: 2;
+}
+
+.uncertainty-band-plot {
+  position: absolute;
+  top: var(--plot-top-inset);
+  right: 0;
+  bottom: var(--plot-bottom-inset);
+  left: var(--plot-left-inset);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.uncertainty-band-plot svg {
+  display: block;
+  overflow: visible;
+}
+
+.uncertainty-band {
+  fill: rgba(183, 121, 31, 0.16);
+  stroke: rgba(183, 121, 31, 0.22);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-frame ._chartistry_tick_label {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-frame ._chartistry_tick_label text {
+  fill: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  opacity: 0.9;
+}
+
+.chart-frame ._chartistry_axis_marker {
+  opacity: 0.78;
+}
+
+.chart-frame ._chartistry_grid_line_y {
+  opacity: 0.7;
+}
+
+.hover-cursor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.hover-cursor-point {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 3px solid var(--blue);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 3px 12px rgba(23, 33, 29, 0.24);
+  transform: translate(-50%, -50%);
+}
+
+.chart-card.temperature .hover-cursor-point {
+  border-color: var(--amber);
+}
+
+.chart-card.level .hover-cursor-point {
+  border-color: var(--teal);
+}
+
+.plot-current {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  min-width: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.plot-current > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.plot-current strong {
+  font-size: clamp(1.85rem, 5vw, 3rem);
+  line-height: 1;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.shared-time-axis {
+  position: relative;
+  order: 2;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
+  gap: 16px;
+  padding: 0 16px 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.chart-stack.single .shared-time-axis {
+  order: 5;
+}
+
+.axis-content {
+  display: grid;
+  gap: 2px;
+  margin-left: var(--plot-left-inset);
+  min-width: 0;
+}
+
+.axis-line {
+  position: relative;
+  height: 8px;
+  width: 100%;
+  border-top: 1px solid var(--plot-grid-line);
+}
+
+.axis-tick-mark {
+  position: absolute;
+  top: -1px;
+  width: 1px;
+  height: 7px;
+  background: var(--plot-grid-line);
+  transform: translateX(-50%);
+}
+
+.axis-labels {
+  position: relative;
+  height: 17px;
+  min-width: 0;
+}
+
+.axis-label {
+  position: absolute;
+  top: 0;
+  width: 92px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  opacity: 0.9;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.axis-label.start {
+  text-align: left;
+  transform: translateX(0);
+}
+
+.axis-label.end {
+  text-align: right;
+  transform: translateX(-100%);
+}
+
+.axis-hover-tick {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 31px;
+  background: var(--plot-cursor-line);
+  transform: translateX(-50%);
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 360px;
+  padding: 48px 20px;
+  text-align: center;
+}
+
+.empty-state h2,
+.empty-state p {
+  margin: 0;
+}
+
+.loading-mark {
+  width: 56px;
+  height: 56px;
+  border: 6px solid var(--line);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.status-line {
+  color: var(--muted);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 900px) {
+  .topbar,
+  .station-heading,
+  .chart-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .topbar-actions {
+    justify-content: flex-start;
+  }
+
+  .source-strip,
+  .station-tabs {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .plot-row {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-time-axis {
+    grid-template-columns: 1fr;
+  }
+
+  .axis-spacer {
+    display: none;
+  }
+
+  .plot-current {
+    padding-top: 14px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(100vw - 20px, 1180px);
+    padding-top: 12px;
+  }
+
+  .source-strip,
+  .station-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .station-tab {
+    min-height: 104px;
+  }
+
+  .chart-frame {
+    height: 220px;
+  }
+
+  .axis-label {
+    width: 76px;
+    font-size: 0.7rem;
+  }
+
+  .axis-label:nth-child(even) {
+    display: none;
+  }
+}
