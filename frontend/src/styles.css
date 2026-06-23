@@ -12,10 +12,8 @@
   --red: #b42318;
   --green: #2f7d46;
   --shadow: 0 14px 45px rgba(25, 38, 34, 0.10);
-  --plot-left-inset: 90px;
-  --plot-top-inset: 0px;
-  --plot-bottom-inset: 0px;
-  --plot-grid-line: rgba(97, 112, 106, 0.24);
+  --plot-left-inset: 86px;
+  --plot-grid-line: rgba(97, 112, 106, 0.15);
   --plot-cursor-line: rgba(23, 33, 29, 0.52);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -37,6 +35,7 @@ body {
     linear-gradient(180deg, rgba(15, 118, 110, 0.10), rgba(15, 118, 110, 0) 280px),
     var(--bg);
   color: var(--ink);
+  overflow-x: hidden;
 }
 
 button,
@@ -57,6 +56,32 @@ a {
   padding: 24px 0 48px;
 }
 
+.app-shell.focus-mode {
+  width: min(1440px, calc(100vw - 24px));
+  padding: 12px 0 24px;
+}
+
+.app-shell.focus-mode .topbar {
+  display: none;
+}
+
+.focus-toggle-button {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(25, 38, 34, 0.12);
+}
+
+.focus-toggle-button:hover {
+  border-color: rgba(15, 118, 110, 0.45);
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -66,8 +91,7 @@ a {
 }
 
 .topbar h1,
-.station-heading h2,
-.chart-heading h3 {
+.station-heading h2 {
   margin: 0;
   letter-spacing: 0;
 }
@@ -126,14 +150,83 @@ a {
   color: var(--ink);
 }
 
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px;
+  padding: 0;
+}
+
+.button-icon {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.refresh-button.active {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+
+.refresh-button.ghost {
+  color: var(--muted);
+}
+
 .refresh-button:hover,
 .station-tab:hover {
   border-color: rgba(15, 118, 110, 0.45);
 }
 
+.pro-signin {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow);
+}
+
+.pro-signin strong {
+  margin-right: 4px;
+}
+
+.pro-signin input {
+  min-width: 160px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.pro-signin input:focus {
+  border-color: var(--teal);
+  outline: 2px solid rgba(15, 118, 110, 0.16);
+  outline-offset: 0;
+}
+
 .dashboard {
   display: grid;
   gap: 18px;
+  min-width: 0;
+}
+
+.dashboard-focus {
+  gap: 0;
 }
 
 .source-strip,
@@ -159,6 +252,10 @@ a {
   gap: 2px;
 }
 
+.source-strip-footer {
+  box-shadow: none;
+}
+
 .label {
   color: var(--muted);
   font-size: 0.76rem;
@@ -167,9 +264,7 @@ a {
 }
 
 .cache,
-.loading-text,
-.status-pill,
-.kind {
+.loading-text {
   display: inline-flex;
   align-items: center;
   width: fit-content;
@@ -180,19 +275,16 @@ a {
   font-weight: 900;
 }
 
-.cache.fresh,
-.status-pill.complete {
+.cache.fresh {
   background: #e7f6ec;
   color: var(--green);
 }
 
-.cache.stale,
-.status-pill.partial {
+.cache.stale {
   background: #fff3d6;
   color: var(--amber);
 }
 
-.status-pill.missing,
 .error-text {
   color: var(--red);
 }
@@ -213,14 +305,19 @@ a {
 
 .station-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.station-tabs-bottom {
+  margin-top: 2px;
 }
 
 .station-tab {
   display: grid;
-  gap: 8px;
-  min-height: 124px;
+  align-content: center;
+  gap: 7px;
+  min-height: 96px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -240,35 +337,19 @@ a {
 }
 
 .station-tab small,
-.chart-heading small,
 .plot-current small {
   color: var(--muted);
   line-height: 1.35;
 }
 
-.kind {
-  padding: 0 8px;
-  min-height: 22px;
-}
-
-.kind.river {
-  background: #e4efff;
-  color: var(--blue);
-}
-
-.kind.lake {
-  background: var(--teal-soft);
-  color: var(--teal);
-}
-
 .station-panel {
   display: grid;
   gap: 18px;
+  min-width: 0;
   padding: 18px;
 }
 
-.station-heading,
-.chart-heading {
+.station-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -280,48 +361,52 @@ a {
   line-height: 1.05;
 }
 
-.station-notice {
+.location-subtitle {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.page-live-clock {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  line-height: 1.2;
+  padding-top: 4px;
+  white-space: nowrap;
+}
+
+.station-footnote {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid #f0d394;
-  border-radius: 8px;
-  background: #fff8e8;
-  color: #604000;
-}
-
-.station-notice strong {
+  align-items: baseline;
+  gap: 6px;
+  margin: -7px 0 0;
+  color: var(--muted);
   font-size: 0.78rem;
-  text-transform: uppercase;
-}
-
-.station-notice span {
-  color: #72500b;
   line-height: 1.35;
 }
 
-.range-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-  color: var(--ink);
-  font-size: 0.9rem;
+.station-footnote strong {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
-.range-row.subtle {
-  padding-top: 0;
-  border-top: 0;
-  color: var(--muted);
+.station-footnote span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chart-stack {
   position: relative;
   display: grid;
   gap: 0;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -332,80 +417,9 @@ a {
   position: relative;
   z-index: 2;
   display: grid;
-  gap: 6px;
-  padding: 10px 16px 8px;
-  border-bottom: 1px solid rgba(220, 227, 222, 0.72);
+  padding: 12px 16px;
+  overflow: hidden;
   min-width: 0;
-}
-
-.stack-time-grid {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
-  gap: 16px;
-  padding: 0 16px;
-  pointer-events: none;
-}
-
-.stack-time-grid-plot {
-  position: relative;
-  min-width: 0;
-  margin-left: var(--plot-left-inset);
-}
-
-.stack-grid-line,
-.stack-hover-grid-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  transform: translateX(-50%);
-}
-
-.stack-grid-line {
-  width: 1px;
-  background: var(--plot-grid-line);
-}
-
-.stack-hover-grid-line {
-  width: 2px;
-  background: var(--plot-cursor-line);
-}
-
-.chart-card.discharge {
-  order: 1;
-  box-shadow: inset 4px 0 0 var(--blue);
-}
-
-.chart-card.level {
-  order: 4;
-  box-shadow: inset 4px 0 0 var(--teal);
-}
-
-.chart-card.temperature {
-  order: 3;
-  box-shadow: inset 4px 0 0 var(--amber);
-}
-
-.chart-heading h3 {
-  font-size: 0.95rem;
-}
-
-.forecast-summary {
-  display: block;
-  margin-top: 3px;
-}
-
-.chart-heading small:not(.forecast-summary) {
-  display: none;
-}
-
-.chart-heading > span {
-  color: var(--muted);
-  font-weight: 900;
-  font-size: 0.82rem;
-  white-space: nowrap;
 }
 
 .plot-row {
@@ -413,6 +427,7 @@ a {
   grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
   gap: 16px;
   align-items: stretch;
+  min-width: 0;
 }
 
 .chart-frame {
@@ -423,31 +438,92 @@ a {
   min-height: 0;
 }
 
-.chart-frame ._chartistry,
-.chart-frame svg {
+.custom-chart {
+  position: relative;
   width: 100%;
   height: 100%;
-  max-width: none;
 }
 
-.chart-frame ._chartistry {
-  position: relative;
-  z-index: 2;
-}
-
-.uncertainty-band-plot {
+.custom-y-axis {
   position: absolute;
-  top: var(--plot-top-inset);
-  right: 0;
-  bottom: var(--plot-bottom-inset);
-  left: var(--plot-left-inset);
-  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--plot-left-inset);
   pointer-events: none;
 }
 
-.uncertainty-band-plot svg {
+.custom-y-axis-title {
+  position: absolute;
+  top: 50%;
+  right: 40px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1;
+  opacity: 0.92;
+  text-transform: uppercase;
+  transform: translateY(-50%) rotate(180deg);
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+}
+
+.custom-y-tick {
+  position: absolute;
+  right: 10px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  opacity: 0.9;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
+.custom-plot-area {
+  position: absolute;
+  inset: 0;
+}
+
+.plot-scroll-viewport {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--plot-left-inset);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.plot-scroll-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.plot-scroll-content {
+  position: relative;
+  min-width: 100%;
+  height: 100%;
+}
+
+.custom-plot-area svg {
   display: block;
+  width: 100%;
+  height: 100%;
   overflow: visible;
+}
+
+.custom-grid-x line,
+.custom-grid-y line {
+  stroke: rgba(97, 112, 106, 0.12);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.sun-shading rect {
+  fill: rgba(23, 33, 29, 0.045);
 }
 
 .uncertainty-band {
@@ -457,24 +533,51 @@ a {
   vector-effect: non-scaling-stroke;
 }
 
-.chart-frame ._chartistry_tick_label {
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
+.custom-area {
+  stroke: none;
+  fill-opacity: 0.18;
 }
 
-.chart-frame ._chartistry_tick_label text {
-  fill: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 650;
-  opacity: 0.9;
+.custom-area.forecast {
+  fill: #b45309;
+  fill-opacity: 0.10;
 }
 
-.chart-frame ._chartistry_axis_marker {
-  opacity: 0.78;
+.custom-area.safety-safe {
+  fill: #16803c;
 }
 
-.chart-frame ._chartistry_grid_line_y {
-  opacity: 0.7;
+.custom-area.safety-risky {
+  fill: #d97706;
+}
+
+.custom-area.safety-noswim {
+  fill: #dc2626;
+}
+
+.custom-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.custom-line.forecast {
+  stroke: #b45309;
+  stroke-dasharray: 7 5;
+}
+
+.custom-line.safety-safe {
+  stroke: #16803c;
+}
+
+.custom-line.safety-risky {
+  stroke: #d97706;
+}
+
+.custom-line.safety-noswim {
+  stroke: #dc2626;
 }
 
 .hover-cursor {
@@ -482,6 +585,15 @@ a {
   inset: 0;
   pointer-events: none;
   z-index: 4;
+}
+
+.hover-cursor-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--plot-cursor-line);
+  transform: translateX(-50%);
 }
 
 .hover-cursor-point {
@@ -506,17 +618,38 @@ a {
 .plot-current {
   display: grid;
   align-content: center;
-  gap: 10px;
+  gap: 12px;
+  max-width: 100%;
   min-width: 0;
-  padding-left: 16px;
-  border-left: 1px solid var(--line);
+  padding-left: 8px;
 }
 
-.plot-current > span {
+.plot-current-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.plot-current-heading h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.15;
+}
+
+.plot-current-heading small {
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+
+.plot-readout {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.readout-context {
+  color: var(--muted);
 }
 
 .plot-current strong {
@@ -527,43 +660,136 @@ a {
   word-break: normal;
 }
 
+.readout-value.safety-safe {
+  color: #16803c;
+}
+
+.readout-value.safety-risky {
+  color: #d97706;
+}
+
+.readout-value.safety-noswim {
+  color: #dc2626;
+}
+
+.discharge-comment {
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.discharge-comment.safety-safe {
+  color: #16803c;
+}
+
+.discharge-comment.safety-risky {
+  color: #d97706;
+}
+
+.discharge-comment.safety-noswim {
+  color: #dc2626;
+}
+
 .shared-time-axis {
   position: relative;
-  order: 2;
-  z-index: 2;
+  z-index: 3;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
   gap: 16px;
-  padding: 0 16px 4px;
-  background: transparent;
+  padding: 0 16px;
+  background: #ffffff;
   color: var(--muted);
 }
 
-.chart-stack.single .shared-time-axis {
-  order: 5;
+.time-axis-top {
+  padding-top: 8px;
 }
 
-.axis-content {
-  display: grid;
-  gap: 2px;
+.time-axis-bottom {
+  padding-bottom: 8px;
+}
+
+.time-axis-top .axis-rule-top,
+.time-axis-bottom .axis-rule-bottom {
+  display: none;
+}
+
+.time-axis-top .axis-scroll-viewport,
+.time-axis-middle .axis-scroll-viewport {
+  scrollbar-width: none;
+}
+
+.time-axis-top .axis-scroll-viewport::-webkit-scrollbar,
+.time-axis-middle .axis-scroll-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.shared-axis-frame {
   margin-left: var(--plot-left-inset);
+  max-width: 100%;
   min-width: 0;
 }
 
-.axis-line {
+.axis-scroll-viewport {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-color: rgba(97, 112, 106, 0.34) transparent;
+  scrollbar-width: thin;
+}
+
+.axis-scroll-content {
+  display: grid;
+  gap: 0;
+  min-width: 100%;
+}
+
+.axis-rule {
   position: relative;
   height: 8px;
   width: 100%;
+}
+
+.axis-rule-top {
+  border-bottom: 1px solid var(--plot-grid-line);
+}
+
+.axis-rule-bottom {
   border-top: 1px solid var(--plot-grid-line);
 }
 
 .axis-tick-mark {
   position: absolute;
-  top: -1px;
   width: 1px;
-  height: 7px;
+  height: 6px;
   background: var(--plot-grid-line);
   transform: translateX(-50%);
+}
+
+.axis-rule-top .axis-tick-mark {
+  bottom: -1px;
+}
+
+.axis-rule-bottom .axis-tick-mark {
+  top: -1px;
+}
+
+.axis-tick-mark.day {
+  height: 8px;
+  background: rgba(97, 112, 106, 0.34);
+}
+
+.axis-tick-mark.noon {
+  height: 6px;
+  background: rgba(97, 112, 106, 0.24);
+}
+
+.axis-tick-mark.hour {
+  height: 4px;
 }
 
 .axis-labels {
@@ -575,7 +801,7 @@ a {
 .axis-label {
   position: absolute;
   top: 0;
-  width: 92px;
+  width: 26px;
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 650;
@@ -589,6 +815,21 @@ a {
   transform: translateX(-50%);
 }
 
+.axis-label.day {
+  width: 44px;
+  font-weight: 850;
+}
+
+.axis-label.hour {
+  width: 24px;
+  opacity: 0.72;
+}
+
+.axis-label.noon {
+  width: 24px;
+  opacity: 0.78;
+}
+
 .axis-label.start {
   text-align: left;
   transform: translateX(0);
@@ -599,13 +840,33 @@ a {
   transform: translateX(-100%);
 }
 
+.time-axis-middle .axis-label {
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.time-axis-middle .axis-label.start {
+  transform: translateY(-50%);
+}
+
+.time-axis-middle .axis-label.end {
+  transform: translate(-100%, -50%);
+}
+
 .axis-hover-tick {
   position: absolute;
-  top: -5px;
   width: 2px;
-  height: 31px;
+  height: 8px;
   background: var(--plot-cursor-line);
   transform: translateX(-50%);
+}
+
+.axis-rule-top .axis-hover-tick {
+  bottom: -1px;
+}
+
+.axis-rule-bottom .axis-hover-tick {
+  top: -1px;
 }
 
 .empty-state {
@@ -643,8 +904,7 @@ a {
 
 @media (max-width: 900px) {
   .topbar,
-  .station-heading,
-  .chart-heading {
+  .station-heading {
     align-items: stretch;
     flex-direction: column;
   }
@@ -673,12 +933,18 @@ a {
   .plot-current {
     padding-top: 14px;
     padding-left: 0;
-    border-top: 1px solid var(--line);
-    border-left: 0;
+  }
+
+  .shared-time-axis {
+    padding-right: 16px;
   }
 }
 
 @media (max-width: 640px) {
+  :root {
+    --plot-left-inset: 72px;
+  }
+
   .app-shell {
     width: min(100vw - 20px, 1180px);
     padding-top: 12px;
@@ -690,19 +956,43 @@ a {
   }
 
   .station-tab {
-    min-height: 104px;
+    min-height: 88px;
   }
 
   .chart-frame {
-    height: 220px;
+    height: 230px;
+  }
+
+  .custom-y-axis-title {
+    right: 34px;
+    font-size: 0.62rem;
+  }
+
+  .custom-y-tick {
+    right: 7px;
+    font-size: 0.64rem;
+  }
+
+  .plot-current {
+    gap: 10px;
   }
 
   .axis-label {
-    width: 76px;
-    font-size: 0.7rem;
+    width: 24px;
+    font-size: 0.66rem;
   }
 
-  .axis-label:nth-child(even) {
+  .axis-label.day {
+    width: 40px;
+  }
+
+  .axis-label.hour {
     display: none;
+    opacity: 0.68;
+  }
+
+  .axis-label.noon {
+    display: block;
+    width: 22px;
   }
 }

@@ -1,13 +1,19 @@
 use std::{
-    collections::HashMap,
-    env,
+    collections::{BTreeMap, HashMap},
+    env, fs,
+    io::Cursor,
     net::SocketAddr,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
-use chrono::{DateTime, FixedOffset, SecondsFormat};
+use calamine::{open_workbook_auto_from_rs, Data, ExcelDateTime, ExcelDateTimeType, Range, Reader};
+use chrono::{
+    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, TimeZone,
+};
+use mailparse::parse_mail;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,6 +43,9 @@ const ARVE_STATION_TO_JONCTION_M: f64 = 4_000.0;
 const WATER_DENSITY_KG_M3: f64 = 1_000.0;
 const WATER_SPECIFIC_HEAT_J_KG_C: f64 = 4_186.0;
 const MIN_DERIVED_RHONE_DISCHARGE_M3S: f64 = 20.0;
+const PROGRAMME_PATH_ENV: &str = "RHONOMETRE_PROGRAMME_PATH";
+const PROGRAMME_DIR_ENV: &str = "RHONOMETRE_PROGRAMME_DIR";
+const LOCAL_PROGRAMME_DIR: &str = "data/programmes";
 
 const SOURCE_STATIONS: &[StationConfig] = &[
     StationConfig {
@@ -126,8 +135,8 @@ enum CacheStatus {
 
 #[derive(Clone, Debug, Serialize)]
 struct SourceInfo {
-    label: &'static str,
-    url: &'static str,
+    label: String,
+    url: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -246,6 +255,19 @@ struct TemperatureCalibrationSample {
     arve_t: f64,
     observed_upstream_t: f64,
     heat_power_w: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ProgrammeForecasts {
+    seujet: Option<MetricSeries>,
+}
+
+impl ProgrammeForecasts {
+    fn has_data(&self) -> bool {
+        self.seujet
+            .as_ref()
+            .is_some_and(|series| !series.points.is_empty())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,6 +428,7 @@ async fn fetch_dashboard(client: &Client) -> Result<DashboardData, FetchError> {
 
     let mut stations = Vec::with_capacity(SOURCE_STATIONS.len() + 1);
     let mut warnings = Vec::new();
+    let programme_forecasts = load_programme_forecasts(&mut warnings);
     let forecast_by_station = match fetch_features(client, HYDRO_PQ_FORECAST_URL).await {
         Ok(features) => Some(features_by_station(features)),
         Err(err) => {
@@ -515,7 +538,11 @@ async fn fetch_dashboard(client: &Client) -> Result<DashboardData, FetchError> {
         }
     };
 
-    match derive_halle_ile_station(&stations, temperature_calibration.as_ref()) {
+    match derive_halle_ile_station(
+        &stations,
+        temperature_calibration.as_ref(),
+        programme_forecasts.seujet.as_ref(),
+    ) {
         Some(station) => stations.insert(1, station),
         None => warnings.push(
             "Could not derive Rhône - Genève, Halle de l'Ile from Arve and Chancy data".to_string(),
@@ -526,8 +553,14 @@ async fn fetch_dashboard(client: &Client) -> Result<DashboardData, FetchError> {
         generated_at: chrono::Utc::now().to_rfc3339(),
         cache_status: CacheStatus::Fresh,
         source: SourceInfo {
-            label: "Swiss Hydrodaten",
-            url: "https://www.hydrodaten.admin.ch/de/seen-und-fluesse/messstationen-zustand",
+            label: if programme_forecasts.has_data() {
+                "Swiss Hydrodaten + SIG discharge programme"
+            } else {
+                "Swiss Hydrodaten"
+            }
+            .to_string(),
+            url: "https://www.hydrodaten.admin.ch/de/seen-und-fluesse/messstationen-zustand"
+                .to_string(),
         },
         stations,
         warnings,
@@ -537,6 +570,7 @@ async fn fetch_dashboard(client: &Client) -> Result<DashboardData, FetchError> {
 fn derive_halle_ile_station(
     source_stations: &[StationData],
     temperature_calibration: Option<&TemperatureCalibration>,
+    seujet_programme_forecast: Option<&MetricSeries>,
 ) -> Option<StationData> {
     let arve = station_by_id(source_stations, "2170")?;
     let chancy = station_by_id(source_stations, "2174")?;
@@ -564,7 +598,9 @@ fn derive_halle_ile_station(
     }
 
     let mut forecast = Vec::new();
-    if let Some(series) = derive_discharge_forecast(arve, chancy) {
+    if let Some(series) = seujet_programme_forecast {
+        forecast.push(series.clone());
+    } else if let Some(series) = derive_discharge_forecast(arve, chancy) {
         forecast.push(series);
     }
 
@@ -597,6 +633,438 @@ fn derive_halle_ile_station(
             "Estimated from a heat balance calibrated on Arve/Chancy/2606 history while station 2606 is offline.",
         ),
     })
+}
+
+fn load_programme_forecasts(warnings: &mut Vec<String>) -> ProgrammeForecasts {
+    let (roots, configured) = programme_source_roots();
+    if roots.is_empty() {
+        return ProgrammeForecasts::default();
+    }
+
+    let mut files = Vec::new();
+    for root in &roots {
+        collect_programme_files(root, &mut files, warnings);
+    }
+    files.sort_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok());
+
+    let mut seujet_points = BTreeMap::new();
+    let mut parsed_file_count = 0usize;
+    for path in &files {
+        match parse_programme_source_path(path, &mut seujet_points) {
+            Ok(points) => {
+                if points > 0 {
+                    parsed_file_count += 1;
+                }
+            }
+            Err(err) => {
+                warn!(path = %path.display(), error = %err, "failed to parse SIG discharge programme");
+                warnings.push(format!(
+                    "Could not read SIG discharge programme {}: {err}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if seujet_points.is_empty() {
+        if configured && !files.is_empty() {
+            warnings.push(
+                "Configured SIG discharge programme did not contain usable Q Seujet hourly points"
+                    .to_string(),
+            );
+        }
+        return ProgrammeForecasts::default();
+    }
+
+    info!(
+        file_count = parsed_file_count,
+        point_count = seujet_points.len(),
+        "loaded SIG discharge programme"
+    );
+
+    ProgrammeForecasts {
+        seujet: Some(MetricSeries {
+            kind: MetricKind::Discharge,
+            label_fr: "Programme SIG Seujet",
+            label_en: "SIG Seujet programme",
+            unit: "m³/s".to_string(),
+            points: seujet_points
+                .into_iter()
+                .map(|(timestamp, value)| HistoryPoint {
+                    timestamp: timestamp.to_rfc3339_opts(SecondsFormat::Secs, true),
+                    value,
+                })
+                .collect(),
+            uncertainty: None,
+        }),
+    }
+}
+
+fn programme_source_roots() -> (Vec<PathBuf>, bool) {
+    let mut roots = Vec::new();
+    let mut configured = false;
+
+    if let Some(paths) = env::var_os(PROGRAMME_PATH_ENV) {
+        roots.extend(env::split_paths(&paths));
+        configured = true;
+    }
+
+    if let Some(path) = env::var_os(PROGRAMME_DIR_ENV) {
+        roots.push(PathBuf::from(path));
+        configured = true;
+    }
+
+    let local_dir = PathBuf::from(LOCAL_PROGRAMME_DIR);
+    if local_dir.exists() {
+        roots.push(local_dir);
+        configured = true;
+    }
+
+    if roots.is_empty() {
+        if let Some(path) = newest_download_programme_source() {
+            roots.push(path);
+        }
+    }
+
+    (roots, configured)
+}
+
+fn newest_download_programme_source() -> Option<PathBuf> {
+    let downloads = PathBuf::from(env::var_os("HOME")?).join("Downloads");
+    let entries = fs::read_dir(downloads).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_likely_programme_source(path))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok()?;
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn is_likely_programme_source(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let normalized = name
+        .to_lowercase()
+        .replace('é', "e")
+        .replace('è', "e")
+        .replace('ê', "e")
+        .replace('ë', "e");
+    let ascii_name = normalized
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+
+    ascii_name.contains("programme")
+        && ascii_name.contains("debit")
+        && (path.is_file() || path.is_dir())
+}
+
+fn collect_programme_files(path: &Path, files: &mut Vec<PathBuf>, warnings: &mut Vec<String>) {
+    if path.is_file() {
+        if should_attempt_programme_file(path) {
+            files.push(path.to_path_buf());
+        }
+        return;
+    }
+
+    if path.is_dir() {
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(err) => {
+                warnings.push(format!(
+                    "Could not open SIG discharge programme directory {}: {err}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+
+        for entry in entries.filter_map(Result::ok) {
+            let child = entry.path();
+            if child.is_file() && should_attempt_programme_file(&child) {
+                files.push(child);
+            }
+        }
+        return;
+    }
+
+    warnings.push(format!(
+        "Configured SIG discharge programme path does not exist: {}",
+        path.display()
+    ));
+}
+
+fn should_attempt_programme_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("xls" | "xlsx" | "xlsm" | "xlsb" | "eml" | "txt" | "rtfd")
+    )
+}
+
+fn parse_programme_source_path(
+    path: &Path,
+    seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+) -> Result<usize, String> {
+    let bytes = fs::read(path).map_err(|err| format!("failed to read programme source: {err}"))?;
+
+    if is_workbook_path(path) {
+        return parse_programme_workbook_bytes(&path.display().to_string(), &bytes, seujet_points);
+    }
+
+    parse_programme_mail_bytes(&path.display().to_string(), &bytes, seujet_points).or_else(
+        |mail_err| {
+            parse_programme_workbook_bytes(&path.display().to_string(), &bytes, seujet_points)
+                .map_err(|workbook_err| {
+                    format!(
+                        "not a readable programme email ({mail_err}) or workbook ({workbook_err})"
+                    )
+                })
+        },
+    )
+}
+
+fn is_workbook_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("xls" | "xlsx" | "xlsm" | "xlsb")
+    )
+}
+
+fn parse_programme_mail_bytes(
+    name: &str,
+    bytes: &[u8],
+    seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+) -> Result<usize, String> {
+    let mail = parse_mail(bytes).map_err(|err| err.to_string())?;
+    let mut point_count = 0usize;
+    let mut attachment_errors = Vec::new();
+
+    for part in mail.parts() {
+        let disposition = part.get_content_disposition();
+        let filename = disposition
+            .params
+            .get("filename")
+            .cloned()
+            .or_else(|| part.ctype.params.get("name").cloned());
+        let mimetype = part.ctype.mimetype.to_ascii_lowercase();
+
+        if !is_excel_attachment(filename.as_deref(), &mimetype) {
+            continue;
+        }
+
+        let attachment_name = filename.unwrap_or_else(|| format!("{name} attachment"));
+        let attachment = part
+            .get_body_raw()
+            .map_err(|err| format!("failed to decode attachment {attachment_name}: {err}"))?;
+        match parse_programme_workbook_bytes(&attachment_name, &attachment, seujet_points) {
+            Ok(points) => point_count += points,
+            Err(err) => attachment_errors.push(format!("{attachment_name}: {err}")),
+        }
+    }
+
+    if point_count == 0 && !attachment_errors.is_empty() {
+        return Err(attachment_errors.join("; "));
+    }
+
+    Ok(point_count)
+}
+
+fn is_excel_attachment(filename: Option<&str>, mimetype: &str) -> bool {
+    filename
+        .map(|name| {
+            matches!(
+                Path::new(name)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(|extension| extension.to_ascii_lowercase())
+                    .as_deref(),
+                Some("xls" | "xlsx" | "xlsm" | "xlsb")
+            )
+        })
+        .unwrap_or(false)
+        || mimetype.contains("excel")
+        || mimetype.contains("spreadsheet")
+}
+
+fn parse_programme_workbook_bytes(
+    name: &str,
+    bytes: &[u8],
+    seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+) -> Result<usize, String> {
+    let cursor = Cursor::new(bytes.to_vec());
+    let mut workbook =
+        open_workbook_auto_from_rs(cursor).map_err(|err| format!("open workbook: {err}"))?;
+    let mut point_count = 0usize;
+
+    for sheet_name in workbook.sheet_names().to_owned() {
+        let range = workbook
+            .worksheet_range(&sheet_name)
+            .map_err(|err| format!("read worksheet {sheet_name}: {err}"))?;
+        point_count += collect_hourly_programme_points(&range, "Q Seujet", seujet_points);
+    }
+
+    if point_count == 0 {
+        return Err(format!(
+            "{name} did not contain Q Seujet hourly programme points"
+        ));
+    }
+
+    Ok(point_count)
+}
+
+fn collect_hourly_programme_points(
+    range: &Range<Data>,
+    series_label: &str,
+    points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+) -> usize {
+    let rows = range.rows().collect::<Vec<_>>();
+    let mut point_count = 0usize;
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        if !row_contains_label(row, series_label) {
+            continue;
+        }
+
+        let Some(date) = row.iter().find_map(cell_date) else {
+            continue;
+        };
+        let Some(headers) = find_time_headers(&rows, row_idx) else {
+            continue;
+        };
+        let Some(midnight_idx) = headers.iter().position(|(_, hour)| *hour == 0) else {
+            continue;
+        };
+
+        for (column_idx, hour) in headers.iter().skip(midnight_idx).take(24) {
+            let Some(value) = row.get(*column_idx).and_then(cell_number) else {
+                continue;
+            };
+            let Some(timestamp) = geneva_datetime(date, *hour) else {
+                continue;
+            };
+            points.insert(timestamp, value);
+            point_count += 1;
+        }
+    }
+
+    point_count
+}
+
+fn find_time_headers(rows: &[&[Data]], row_idx: usize) -> Option<Vec<(usize, u32)>> {
+    let start_idx = row_idx.saturating_sub(12);
+    for header_idx in (start_idx..row_idx).rev() {
+        let headers = rows[header_idx]
+            .iter()
+            .enumerate()
+            .filter_map(|(column_idx, cell)| {
+                Some((column_idx, parse_hour_label(cell_text(cell)?)?))
+            })
+            .collect::<Vec<_>>();
+
+        if headers.len() >= 12 && headers.iter().any(|(_, hour)| *hour == 0) {
+            return Some(headers);
+        }
+    }
+
+    None
+}
+
+fn row_contains_label(row: &[Data], label: &str) -> bool {
+    row.iter().any(|cell| {
+        cell_text(cell)
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|text| text.eq_ignore_ascii_case(label))
+    })
+}
+
+fn cell_text(cell: &Data) -> Option<String> {
+    match cell {
+        Data::String(value) => Some(value.clone()),
+        Data::Int(value) => Some(value.to_string()),
+        Data::Float(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn cell_number(cell: &Data) -> Option<f64> {
+    match cell {
+        Data::Int(value) => Some(*value as f64),
+        Data::Float(value) => Some(*value),
+        Data::String(value) => value.trim().replace(',', ".").parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn cell_date(cell: &Data) -> Option<NaiveDate> {
+    match cell {
+        Data::DateTime(value) => excel_datetime_date(*value),
+        Data::Float(value) => excel_datetime_date(ExcelDateTime::new(
+            *value,
+            ExcelDateTimeType::DateTime,
+            false,
+        )),
+        Data::Int(value) => excel_datetime_date(ExcelDateTime::new(
+            *value as f64,
+            ExcelDateTimeType::DateTime,
+            false,
+        )),
+        Data::String(value) => NaiveDate::parse_from_str(value.trim(), "%d.%m.%Y")
+            .or_else(|_| NaiveDate::parse_from_str(value.trim(), "%d/%m/%Y"))
+            .ok(),
+        _ => None,
+    }
+}
+
+fn excel_datetime_date(value: ExcelDateTime) -> Option<NaiveDate> {
+    let (year, month, day, _, _, _, _) = value.to_ymd_hms_milli();
+    NaiveDate::from_ymd_opt(i32::from(year), u32::from(month), u32::from(day))
+}
+
+fn parse_hour_label(value: String) -> Option<u32> {
+    let normalized = value.trim().to_ascii_lowercase().replace(' ', "");
+    let (hour, _) = normalized.split_once('h')?;
+    let hour = hour.parse::<u32>().ok()?;
+    (hour < 24).then_some(hour)
+}
+
+fn geneva_datetime(date: NaiveDate, hour: u32) -> Option<DateTime<FixedOffset>> {
+    let time = NaiveTime::from_hms_opt(hour, 0, 0)?;
+    let offset = geneva_offset(date);
+    offset
+        .from_local_datetime(&NaiveDateTime::new(date, time))
+        .single()
+}
+
+fn geneva_offset(date: NaiveDate) -> FixedOffset {
+    let year = date.year();
+    let dst_start = last_sunday(year, 3);
+    let dst_end = last_sunday(year, 10);
+    let seconds = if date >= dst_start && date < dst_end {
+        2 * 60 * 60
+    } else {
+        60 * 60
+    };
+    FixedOffset::east_opt(seconds).expect("valid Geneva UTC offset")
+}
+
+fn last_sunday(year: i32, month: u32) -> NaiveDate {
+    let mut date = NaiveDate::from_ymd_opt(year, month, 31).expect("valid month end");
+    while date.weekday().num_days_from_sunday() != 0 {
+        date = date.pred_opt().expect("previous day exists");
+    }
+    date
 }
 
 async fn fetch_temperature_calibration(

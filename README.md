@@ -1,6 +1,6 @@
 # rhonometre
 
-Modern water conditions dashboard for the Geneva Rhône area. The app displays live discharge, water level, and water temperature where available, with five-day history plots and discharge forecasts sourced from the Swiss Hydrodaten service.
+Modern water conditions dashboard for the Geneva Rhône area. The app displays live discharge and water temperature where available, with five-day history plots. Pro mode can overlay the SIG Seujet discharge programme from forwarded programme emails.
 
 ## Data Sources
 
@@ -20,7 +20,13 @@ The temperature estimate is lagged before applying that heat balance: Chancy is 
 
 The UI shows a station-level warning for `2606` while this estimate is used.
 
-Where Hydrodaten publishes discharge forecasts, the app overlays the forecast median on the discharge chart. For estimated `2606`, the app derives the forecast with the same flow balance at matching timestamps:
+Normal mode does not show forecasts. Pro mode uses the SIG "Programme débit" email attachment for the planned Seujet/Halle de l'Ile discharge when available. The server can read a raw forwarded email (`.eml`, or the saved `.rtfd` MIME file from Mail) and extracts the attached `.xls` workbooks. Configure this explicitly with:
+
+```sh
+RHONOMETRE_PROGRAMME_PATH=/path/to/FW_Programme_debit.eml nix run
+```
+
+or point `RHONOMETRE_PROGRAMME_DIR` at a directory containing programme emails or `.xls` files. If neither is set, the local `nix run` app looks for the newest matching `Programme débit` message in `~/Downloads`. If no SIG programme is available, the app falls back to Hydrodaten discharge forecast medians where Hydrodaten publishes them. For estimated `2606`, that fallback forecast is derived with the same flow balance at matching timestamps:
 
 - `Q_forecast_2606 = Q_forecast_2174 - Q_forecast_2170`
 
