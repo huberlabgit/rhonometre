@@ -8,8 +8,61 @@
     <link data-trunk rel="css" href="src/styles.css" />
     <link data-trunk rel="copy-dir" href="public" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <style>
+      #boot-status {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        color: #1f2937;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 15px;
+        line-height: 1.45;
+        text-align: center;
+        background: #f7faf9;
+      }
+
+      #boot-status[hidden] {
+        display: none;
+      }
+    </style>
+    <script>
+      (() => {
+        const show = (message) => {
+          const boot = document.getElementById("boot-status");
+          if (boot) {
+            boot.hidden = false;
+            boot.textContent = message;
+          }
+        };
+
+        window.addEventListener("error", (event) => {
+          show(`Erreur de chargement: ${event.message}`);
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+          show(`Erreur de chargement: ${event.reason}`);
+        });
+        window.addEventListener("DOMContentLoaded", () => {
+          const app = document.getElementById("app");
+          const boot = document.getElementById("boot-status");
+          if (!app || !boot) {
+            return;
+          }
+
+          const hideIfMounted = () => {
+            if (app.childElementCount > 0) {
+              boot.hidden = true;
+            }
+          };
+          hideIfMounted();
+          new MutationObserver(hideIfMounted).observe(app, { childList: true });
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
+    <div id="boot-status">Chargement de rhonometre...</div>
   </body>
 </html>

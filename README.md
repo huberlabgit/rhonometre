@@ -1,34 +1,30 @@
 # rhonometre
 
-Modern water conditions dashboard for the Geneva Rhône area. The app displays live discharge and water temperature where available, with five-day history plots. Pro mode can overlay the SIG Seujet discharge programme from forwarded programme emails.
+Modern water conditions dashboard for the Geneva Rhône area. The server is an Axum data hub backed by Postgres, and the client is a Dioxus app served as web assets and structured for native mobile clients using the same API.
+
+The normal dashboard shows live discharge and temperature with five-day history. Pro mode is server-authenticated and adds planned Seujet discharge forecasts from forwarded SIG programme emails.
 
 ## Data Sources
 
-The default station set is:
+Default stations:
 
 - Arve - Genève, Bout du Monde (`2170`)
 - Rhône - Genève, Halle de l'Ile (`2606`, estimated while the station is offline)
-- Lac Léman - Genève, Sécheron (`2028`)
+- Lac Léman - Genève, Sécheron (`2028`, source data only)
 - Rhône - Chancy, Aux Ripes (`2174`, downstream/post-Jonction Rhône reference)
 
-Hydrodaten currently publishes Rhône - Genève, Halle de l'Ile (`2606`) as missing and does not expose its seven-day JSON history. The app therefore derives `2606` from Arve (`2170`) and downstream Rhône at Chancy (`2174`):
+The UI currently shows Arve, Halle de l'Ile, and Chancy tabs. Water level is stored when Hydrodaten exposes it, but the client does not render it.
 
-- `Q_2606 = Q_2174 - Q_2170`
-- `T_2606 = (Q_2174 * T_2174 - Q_2170 * T_2170) / Q_2606`
+Hydrodaten currently publishes Rhône - Genève, Halle de l'Ile (`2606`) as missing and does not expose its seven-day JSON history. The app derives `2606` from Arve (`2170`) and downstream Rhône at Chancy (`2174`):
 
-The temperature estimate is lagged before applying that heat balance: Chancy is downstream of the Jonction, so the app estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed timestamp for `2606` temperature is therefore the estimated time when that water passed Halle de l'Ile, not the Chancy measurement time.
-
-The UI shows a station-level warning for `2606` while this estimate is used.
-
-Normal mode does not show forecasts. Pro mode uses the SIG "Programme débit" email attachment for the planned Seujet/Halle de l'Ile discharge when available. The server can read a raw forwarded email (`.eml`, or the saved `.rtfd` MIME file from Mail) and extracts the attached `.xls` workbooks. Configure this explicitly with:
-
-```sh
-RHONOMETRE_PROGRAMME_PATH=/path/to/FW_Programme_debit.eml nix run
+```text
+Q_2606 = Q_2174 - Q_2170
+T_2606 = (Q_2174 * T_2174 - Q_2170 * T_2170) / Q_2606
 ```
 
-or point `RHONOMETRE_PROGRAMME_DIR` at a directory containing programme emails or `.xls` files. If neither is set, the local `nix run` app looks for the newest matching `Programme débit` message in `~/Downloads`. If no SIG programme is available, the app falls back to Hydrodaten discharge forecast medians where Hydrodaten publishes them. For estimated `2606`, that fallback forecast is derived with the same flow balance at matching timestamps:
+The temperature estimate is lagged before applying the heat balance: Chancy is downstream of the Jonction, so the server estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed `2606` temperature timestamp is therefore the estimated time when that water passed Halle de l'Ile.
 
-- `Q_forecast_2606 = Q_forecast_2174 - Q_forecast_2170`
+Pro forecasts prefer stored SIG "Programme débit" points for `2606`. Hydrodaten forecasts are used only when no SIG programme exists.
 
 Hydrodaten endpoints used by the server:
 
@@ -39,42 +35,162 @@ Hydrodaten endpoints used by the server:
 - Historical water temperature: `https://www.hydrodaten.admin.ch/plots/temperature_7days/{station}_temperature_7days_de.json`
 - Discharge forecast: `https://www.hydrodaten.admin.ch/plots/q_forecast/{station}_q_forecast_de.json`
 
-The server caches upstream Hydrodaten responses for two minutes and trims history series to the latest five days.
+## Server API
+
+- `GET /healthz`
+- `GET /api/v1/dashboard`
+- `GET /api/v1/stations/:id/series?from=&to=&forecast=true`
+- `POST /api/v1/auth/pro`
+- `POST /api/admin/email-ingest`
+
+`/api/v1/dashboard` strips forecasts unless the request includes a valid pro bearer token. `/api/v1/stations/:id/series?forecast=true` also requires pro authorization.
+
+Pro auth validates `RHONOMETRE_PRO_CODE` server-side and returns a signed bearer token. The signing secret is `RHONOMETRE_TOKEN_SECRET`, falling back to the ingest token or pro code for local development.
+
+Email ingest is protected by:
+
+```http
+Authorization: Bearer $RHONOMETRE_INGEST_TOKEN
+```
+
+The body may be raw RFC822 MIME, multipart uploaded `.eml`, or uploaded `.xls`. The server extracts attached Excel workbooks, reads hourly `Q Seujet` points, and upserts them idempotently as `2606` discharge forecasts from source `sig_programme`. Raw emails are not retained by default; Postgres stores only message hash, received time, subject, attachment names, parsed point count, warnings, and normalized series points.
 
 ## Development
 
-This repository includes a Nix development shell with Rust, the `wasm32-unknown-unknown` target, and Trunk.
+This repository includes a Nix development shell with Rust, the wasm and iOS targets on macOS, Dioxus CLI, Trunk, and Postgres client tools.
 
-Nix flakes only see files tracked by Git. In a brand-new checkout, add the new project files to Git before `nix develop` if Nix reports that `flake.nix` is untracked.
+Run the local app:
 
 ```sh
 nix run
 ```
 
-Then open `http://127.0.0.1:3000`. The default flake app builds the Leptos frontend into `frontend/dist` and starts the Axum server.
+Then open `http://127.0.0.1:3000`. Without `DATABASE_URL`, the server still serves the live dashboard from Hydrodaten but does not persist refreshes or accept stored programme forecasts.
 
-For manual development steps:
-
-```sh
-nix develop
-cd frontend
-trunk build index.html --dist dist
-cd ..
-cargo run -p nivrhone-server
-```
-
-For API-only work:
+For a local Postgres-backed run:
 
 ```sh
-cargo run -p nivrhone-server
-curl http://127.0.0.1:3000/api/dashboard
+export DATABASE_URL=postgres://rhonometre:rhonometre@127.0.0.1:5432/rhonometre
+export RHONOMETRE_INGEST_TOKEN=dev-ingest-token
+export RHONOMETRE_PRO_CODE=dev-pro-code
+export RHONOMETRE_TOKEN_SECRET=dev-token-secret
+nix run
 ```
 
-## Build
+Manual checks:
 
 ```sh
-nix develop -c trunk build frontend/index.html --dist frontend/dist --release
-nix develop -c cargo build -p nivrhone-server --release
+nix develop -c cargo check -p nivrhone-server
+nix develop -c cargo check -p nivrhone-frontend --target wasm32-unknown-unknown
+nix develop -c env -u SDKROOT -u DEVELOPER_DIR sh -c 'export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; cargo check -p nivrhone-frontend --target aarch64-apple-ios-sim --no-default-features --features mobile'
+nix build .#default
 ```
 
-The Axum server serves the built frontend from `frontend/dist` by default. Override with `STATIC_DIR=/path/to/dist`.
+## iOS App
+
+The native iOS app is the same Dioxus frontend built with the `mobile` feature. Its bundle metadata is in `frontend/Dioxus.toml`, and it calls the Axum API configured by `RHONOMETRE_API_BASE`.
+
+Simulator:
+
+```sh
+# Terminal 1: start the API server
+nix run
+
+# Terminal 2: start the simulator app
+open /Applications/Xcode.app/Contents/Developer/Applications/Simulator.app
+xcrun simctl boot "iPhone 15 Pro Max"
+nix run .#ios-simulator
+```
+
+For the simulator, the default API base is `http://127.0.0.1:3000`, which reaches the server running on the Mac.
+
+Physical iPhone:
+
+```sh
+# Terminal 1: start the API server on the LAN
+HOST=0.0.0.0 nix run
+
+# Terminal 2: build/sign/deploy the app
+RHONOMETRE_API_BASE=http://YOUR_MAC_LAN_IP:3000 \
+IOS_DEVICE="Your iPhone Name" \
+APPLE_TEAM_ID="Apple Development: Your Name (TEAMID)" \
+nix run .#ios-device
+```
+
+For a real iPhone, keep the phone and Mac on the same network or use the production HTTPS URL. `APPLE_TEAM_ID` is the signing identity shown by `security find-identity -v -p codesigning`, and `IOS_DEVICE` can be the device name or UDID. The wrapper clears Nix's macOS SDK variables before calling Xcode tools so iOS builds use the real Xcode iPhone SDK.
+
+## Production
+
+The flake builds one package containing:
+
+- `bin/rhonometre-server`
+- `bin/rhonometre`
+- Dioxus web assets under `share/rhonometre/dist`
+
+Required production environment:
+
+```sh
+DATABASE_URL=postgres://rhonometre:...@127.0.0.1:5432/rhonometre
+RHONOMETRE_INGEST_TOKEN=...
+RHONOMETRE_PRO_CODE=...
+RHONOMETRE_TOKEN_SECRET=...
+```
+
+Optional local programme import paths:
+
+```sh
+RHONOMETRE_PROGRAMME_PATH=/var/lib/rhonometre/programmes/latest.eml
+RHONOMETRE_PROGRAMME_DIR=/var/lib/rhonometre/programmes
+```
+
+The included NixOS module exposes `services.rhonometre`. It creates `/var/lib/rhonometre`, `/var/lib/rhonometre/programmes`, and `/var/backups/rhonometre`, points `STATIC_DIR` at the packaged Dioxus build, and expects secrets in `/etc/rhonometre.env` by default.
+
+Typical deployment shape:
+
+1. Run Postgres on the VPS.
+2. Enable the `services.rhonometre` NixOS module.
+3. Put `DATABASE_URL`, `RHONOMETRE_INGEST_TOKEN`, `RHONOMETRE_PRO_CODE`, and `RHONOMETRE_TOKEN_SECRET` in the env file.
+4. Put Caddy or nginx in front of the Axum service for HTTPS.
+5. Configure the inbound email provider to forward SIG programme mail to `POST /api/admin/email-ingest`.
+
+### Infomaniak Jelastic
+
+For an Infomaniak Jelastic environment that deploys from GitHub, use the root `Dockerfile`.
+The container builds the Axum server and Dioxus web assets, listens on `0.0.0.0:8080`,
+and serves the frontend from `/app/dist`.
+
+Local Docker build test:
+
+```sh
+nix run .#docker-up
+nix run .#docker-build
+```
+
+On macOS, `nix run .#docker-up` starts a Colima VM-backed Docker daemon. Stop it with
+`nix run .#docker-down`. Override the local image tag with
+`RHONOMETRE_DOCKER_TAG=registry.example/rhonometre:test nix run .#docker-build`.
+If you need an amd64 image from Apple Silicon, set
+`RHONOMETRE_DOCKER_PLATFORM=linux/amd64`.
+
+Recommended Jelastic topology:
+
+- One Docker/custom application node built from this GitHub repository.
+- One PostgreSQL node managed by Jelastic/Infomaniak.
+- Public HTTPS routing to the application node's HTTP port.
+
+Application environment variables:
+
+```sh
+HOST=0.0.0.0
+PORT=8080
+STATIC_DIR=/app/dist
+DATABASE_URL=postgres://USER:PASSWORD@POSTGRES_HOST:5432/DB_NAME
+RHONOMETRE_INGEST_TOKEN=...
+RHONOMETRE_PRO_CODE=...
+RHONOMETRE_TOKEN_SECRET=...
+RHONOMETRE_PROGRAMME_DIR=/data/programmes
+```
+
+The app can run without `DATABASE_URL`, but pro SIG programme forecasts require Postgres.
+Do not store programme emails in the application container filesystem; use the email ingest
+webhook at `/api/admin/email-ingest` so normalized points are stored in Postgres.

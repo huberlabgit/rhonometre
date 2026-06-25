@@ -1,23 +1,40 @@
-use std::rc::Rc;
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use dioxus::events::{MouseEvent, ScrollEvent};
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+#[cfg(target_arch = "wasm32")]
 use gloo_net::http::Request;
-use gloo_timers::callback::Interval;
-use leptos::{mount::mount_to_body, prelude::*};
-use serde::Deserialize;
+#[cfg(target_arch = "wasm32")]
+use gloo_timers::future::TimeoutFuture;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::spawn_local;
 
 const REFRESH_MS: u32 = 120_000;
 const SVG_PLOT_WIDTH: f64 = 1000.0;
 const SVG_PLOT_HEIGHT: f64 = 100.0;
-const FORECAST_VISIBLE_SECONDS: f64 = 24.0 * 60.0 * 60.0;
 const GENEVA_LATITUDE: f64 = 46.2044;
 const GENEVA_LONGITUDE: f64 = 6.1432;
 const SUNRISE_SUNSET_ZENITH_DEGREES: f64 = 90.833;
-const PRO_ACCESS_CODE: &str = "rhonometre";
+#[cfg(target_arch = "wasm32")]
+const PRO_TOKEN_STORAGE_KEY: &str = "rhonometre_pro_token";
+const APP_CSS: &str = include_str!("styles.css");
 
-#[derive(Clone, Debug, Deserialize)]
+fn main() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+        register_service_worker();
+        dioxus::LaunchBuilder::web()
+            .with_cfg(dioxus::web::Config::new().rootname("app"))
+            .launch(App);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    dioxus::launch(App);
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct DashboardData {
     generated_at: String,
     cache_status: CacheStatus,
@@ -33,13 +50,13 @@ enum CacheStatus {
     Stale,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct SourceInfo {
     label: String,
     url: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct StationData {
     id: String,
     slug: String,
@@ -51,7 +68,9 @@ struct StationData {
     current: Vec<CurrentMetric>,
     history: Vec<MetricSeries>,
     forecast: Vec<MetricSeries>,
+    #[serde(default)]
     notice_fr: Option<String>,
+    #[serde(default)]
     notice_en: Option<String>,
 }
 
@@ -62,9 +81,13 @@ enum WaterKind {
     Lake,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct CurrentMetric {
     kind: MetricKind,
+    #[serde(default)]
+    label_fr: Option<String>,
+    #[serde(default)]
+    label_en: Option<String>,
     value: f64,
     unit: String,
     measured_at: String,
@@ -78,7 +101,7 @@ enum MetricKind {
     Temperature,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct MetricSeries {
     kind: MetricKind,
     label_fr: String,
@@ -89,24 +112,33 @@ struct MetricSeries {
     uncertainty: Option<MetricUncertainty>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct MetricUncertainty {
     lower: f64,
     upper: f64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct HistoryPoint {
     timestamp: String,
     value: f64,
 }
 
-#[derive(Clone, Debug)]
-struct ChartPoint {
-    x: f64,
-    history_y: f64,
-    forecast_y: f64,
-    timestamp: String,
+#[derive(Clone, Debug, Serialize)]
+struct ProAuthRequest {
+    code: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ProAuthResponse {
+    token: String,
+    expires_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Locale {
+    Fr,
+    En,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,28 +148,6 @@ enum DischargeSafety {
     NoSwim,
 }
 
-#[derive(Clone, Debug)]
-struct SegmentedPath {
-    path: String,
-    safety: DischargeSafety,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct HoverMetric {
-    value: f64,
-    unit: String,
-    timestamp: String,
-    cursor_ratio: f64,
-    point_ratio: f64,
-}
-
-#[derive(Clone, Debug)]
-struct AxisTick {
-    label: String,
-    position: f64,
-    kind: AxisTickKind,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AxisTickKind {
     Day,
@@ -145,1586 +155,1314 @@ enum AxisTickKind {
     Hour,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+struct AxisTick {
+    label: String,
+    timestamp: f64,
+    position: f64,
+    kind: AxisTickKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct ValueAxis {
     min: f64,
     max: f64,
     ticks: Vec<ValueTick>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct ValueTick {
     label: String,
+    value: f64,
     position: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+struct RiskAxisSegment {
+    class_name: &'static str,
+    top: f64,
+    height: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TimedPoint {
+    timestamp: f64,
+    value: f64,
+    label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TimeDomain {
+    min: f64,
+    max: f64,
+    visible_max: f64,
+    ticks: Vec<AxisTick>,
+    sun_bands: Vec<SunBand>,
+    content_width_percent: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct SunBand {
     x: f64,
     width: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Locale {
-    Fr,
-    En,
-}
-
-fn main() {
-    console_error_panic_hook::set_once();
-    register_service_worker();
-
-    mount_to_body(|| view! { <App/> });
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HoverState {
+    timestamp: f64,
+    position: f64,
 }
 
 #[component]
-fn App() -> impl IntoView {
-    let (locale, set_locale) = signal(Locale::Fr);
-    let (selected_station, set_selected_station) = signal("2606".to_string());
-    let (dashboard, set_dashboard) = signal(None::<DashboardData>);
-    let (loading, set_loading) = signal(false);
-    let (error, set_error) = signal(None::<String>);
-    let (focus_mode, set_focus_mode) = signal(initial_focus_mode());
-    let (live_clock, set_live_clock) = signal(format_swiss_now_seconds());
-    let (pro_mode, set_pro_mode) = signal(initial_pro_mode());
-    let (pro_signin_open, set_pro_signin_open) = signal(false);
-    let (pro_code, set_pro_code) = signal(String::new());
-    let (pro_error, set_pro_error) = signal(None::<String>);
+fn App() -> Element {
+    let mut locale = use_signal(|| Locale::Fr);
+    let selected_station = use_signal(|| "2606".to_string());
+    let mut focus_mode = use_signal(initial_focus_mode);
+    #[allow(unused_mut)]
+    let mut live_clock = use_signal(format_swiss_now_seconds);
+    let mut refresh_version = use_signal(|| 0_u64);
+    let mut pro_token = use_signal(read_stored_pro_token);
+    let mut pro_signin_open = use_signal(|| false);
+    let mut pro_code = use_signal(String::new);
+    let mut pro_error = use_signal(|| None::<String>);
+    let mut pro_pending = use_signal(|| false);
 
-    let refresh: Rc<dyn Fn()> = Rc::new(move || {
-        set_loading.set(true);
-        set_error.set(None);
-        spawn_local(async move {
-            match load_dashboard().await {
-                Ok(data) => {
-                    if data
-                        .stations
-                        .iter()
-                        .all(|station| station.id != selected_station.get())
-                    {
-                        if let Some(first) = data.stations.first() {
-                            set_selected_station.set(first.id.clone());
+    #[cfg(target_arch = "wasm32")]
+    use_future(move || async move {
+        loop {
+            TimeoutFuture::new(1_000).await;
+            live_clock.set(format_swiss_now_seconds());
+        }
+    });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            live_clock.set(format_swiss_now_seconds());
+        }
+    });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(u64::from(REFRESH_MS))).await;
+            *refresh_version.write() += 1;
+        }
+    });
+
+    #[cfg(target_arch = "wasm32")]
+    use_future(move || async move {
+        loop {
+            TimeoutFuture::new(REFRESH_MS).await;
+            *refresh_version.write() += 1;
+        }
+    });
+
+    let dashboard = use_resource(move || {
+        let token = pro_token();
+        let _refresh = refresh_version();
+        async move { load_dashboard(token).await }
+    });
+
+    let dashboard_result = dashboard.read().clone();
+    let pro_enabled = pro_token().is_some();
+    let app_class = if focus_mode() {
+        "app-shell focus-mode"
+    } else {
+        "app-shell"
+    };
+
+    rsx! {
+        document::Style { "{APP_CSS}" }
+
+        div { class: "{app_class}",
+            button {
+                class: "focus-toggle-button icon-button",
+                r#type: "button",
+                title: if focus_mode() {
+                    tr(locale(), "Quitter le mode focus", "Exit focus mode")
+                } else {
+                    tr(locale(), "Mode focus", "Focus mode")
+                },
+                onclick: move |_| {
+                    let next = !focus_mode();
+                    focus_mode.set(next);
+                    store_focus_mode(next);
+                },
+                FocusIcon { active: focus_mode() }
+            }
+
+                div { class: "topbar",
+                    div { class: "brand-lockup",
+                        h1 { "rhonometre" }
+                        div { class: "partner-mark",
+                            span { class: "partner-logo-icon", "" }
+                            span { "Pontonniers de Genève" }
                         }
                     }
-                    set_dashboard.set(Some(data));
-                    set_loading.set(false);
-                }
-                Err(err) => {
-                    set_error.set(Some(err));
-                    set_loading.set(false);
+                    div { class: "topbar-actions",
+                    div { class: "page-live-clock", "{live_clock}" }
+                    div { class: "segmented",
+                        button {
+                            class: if locale() == Locale::Fr { "active" } else { "" },
+                            r#type: "button",
+                            onclick: move |_| locale.set(Locale::Fr),
+                            "FR"
+                        }
+                        button {
+                            class: if locale() == Locale::En { "active" } else { "" },
+                            r#type: "button",
+                            onclick: move |_| locale.set(Locale::En),
+                            "EN"
+                        }
+                    }
+                    button {
+                        class: if pro_enabled { "refresh-button active" } else { "refresh-button ghost" },
+                        r#type: "button",
+                        onclick: move |_| {
+                            if pro_token().is_some() {
+                                pro_token.set(None);
+                                store_pro_token(None);
+                                pro_signin_open.set(false);
+                            } else {
+                                pro_signin_open.set(!pro_signin_open());
+                            }
+                        },
+                        if pro_enabled {
+                            "PRO"
+                        } else {
+                            "Pro"
+                        }
+                    }
+                    button {
+                        class: "refresh-button icon-button",
+                        r#type: "button",
+                        title: tr(locale(), "Actualiser", "Refresh"),
+                        disabled: dashboard.pending(),
+                        onclick: move |_| *refresh_version.write() += 1,
+                        RefreshIcon {}
+                    }
                 }
             }
-        });
-    });
 
-    refresh();
-
-    let interval = {
-        let refresh = Rc::clone(&refresh);
-        Interval::new(REFRESH_MS, move || refresh())
-    };
-    interval.forget();
-
-    let clock_interval = Interval::new(1_000, move || {
-        set_live_clock.set(format_swiss_now_seconds());
-    });
-    clock_interval.forget();
-
-    view! {
-        <div class=move || if focus_mode.get() { "app-shell focus-mode" } else { "app-shell" }>
-            <button
-                class="focus-toggle-button icon-button"
-                type="button"
-                title=move || if focus_mode.get() {
-                    tr(locale.get(), "Quitter le mode focus", "Exit focus mode")
-                } else {
-                    tr(locale.get(), "Mode focus", "Focus mode")
-                }
-                aria-label=move || if focus_mode.get() {
-                    tr(locale.get(), "Quitter le mode focus", "Exit focus mode")
-                } else {
-                    tr(locale.get(), "Mode focus", "Focus mode")
-                }
-                on:click=move |_| set_focus_mode.update(|value| *value = !*value)
-            >
-                {move || if focus_mode.get() {
-                    view! { <FocusExitIcon/> }.into_any()
-                } else {
-                    view! { <FocusEnterIcon/> }.into_any()
-                }}
-            </button>
-            <header class="topbar">
-                <div>
-                    <h1>"rhonometre"</h1>
-                </div>
-                <div class="topbar-actions">
-                    <div class="segmented" aria-label="Language">
-                        <button
-                            type="button"
-                            class=move || if locale.get() == Locale::Fr { "active" } else { "" }
-                            on:click=move |_| set_locale.set(Locale::Fr)
-                        >
-                            "FR"
-                        </button>
-                        <button
-                            type="button"
-                            class=move || if locale.get() == Locale::En { "active" } else { "" }
-                            on:click=move |_| set_locale.set(Locale::En)
-                        >
-                            "EN"
-                        </button>
-                    </div>
-                    <button class="refresh-button" type="button" on:click=move |_| refresh()>
-                        {move || tr(locale.get(), "Actualiser", "Refresh")}
-                    </button>
-                    <button
-                        class=move || if pro_mode.get() { "refresh-button active" } else { "refresh-button" }
-                        type="button"
-                        on:click=move |_| {
-                            if pro_mode.get_untracked() {
-                                set_pro_mode.set(false);
-                                set_pro_signin_open.set(false);
-                                set_pro_code.set(String::new());
-                                set_pro_error.set(None);
-                            } else {
-                                set_pro_signin_open.set(true);
+            if pro_signin_open() && !pro_enabled {
+                div { class: "pro-signin",
+                    strong { "Pro" }
+                    input {
+                        r#type: "password",
+                        placeholder: tr(locale(), "code d'accès", "access code"),
+                        value: "{pro_code}",
+                        oninput: move |event| {
+                            pro_code.set(event.value());
+                            pro_error.set(None);
+                        },
+                    }
+                    button {
+                        class: "refresh-button",
+                        r#type: "button",
+                        disabled: pro_pending(),
+                        onclick: move |_| {
+                            let code = pro_code().trim().to_string();
+                            if code.is_empty() {
+                                pro_error.set(Some(tr(locale(), "Code requis", "Code required").to_string()));
+                                return;
                             }
+                            pro_pending.set(true);
+                            pro_error.set(None);
+                            spawn(async move {
+                                match authenticate_pro(code).await {
+                                    Ok(response) => {
+                                        let _expires_at = response.expires_at;
+                                        store_pro_token(Some(&response.token));
+                                        pro_token.set(Some(response.token));
+                                        pro_code.set(String::new());
+                                        pro_signin_open.set(false);
+                                    }
+                                    Err(err) => pro_error.set(Some(err)),
+                                }
+                                pro_pending.set(false);
+                            });
+                        },
+                        if pro_pending() {
+                            {tr(locale(), "Connexion...", "Signing in...")}
+                        } else {
+                            {tr(locale(), "Connexion", "Sign in")}
                         }
-                    >
-                        {move || if pro_mode.get() { tr(locale.get(), "Pro actif", "Pro on") } else { "Pro" }}
-                    </button>
-                </div>
-            </header>
-
-            {move || if pro_signin_open.get() && !pro_mode.get() && !focus_mode.get() {
-                Some(view! {
-                    <section class="pro-signin">
-                        <strong>{tr(locale.get(), "Mode pro", "Pro mode")}</strong>
-                        <input
-                            type="password"
-                            autocomplete="current-password"
-                            placeholder=tr(locale.get(), "Code", "Code")
-                            prop:value=move || pro_code.get()
-                            on:input=move |event| {
-                                if let Some(input) = event
-                                    .target()
-                                    .and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                {
-                                    set_pro_code.set(input.value());
-                                    set_pro_error.set(None);
-                                }
-                            }
-                        />
-                        <button
-                            class="refresh-button"
-                            type="button"
-                            on:click=move |_| {
-                                if pro_code.get_untracked().trim() == PRO_ACCESS_CODE {
-                                    set_pro_mode.set(true);
-                                    set_pro_signin_open.set(false);
-                                    set_pro_code.set(String::new());
-                                    set_pro_error.set(None);
-                                } else {
-                                    set_pro_error.set(Some(tr(locale.get_untracked(), "Code invalide", "Invalid code").to_string()));
-                                }
-                            }
-                        >
-                            {tr(locale.get(), "Se connecter", "Sign in")}
-                        </button>
-                        <button
-                            class="refresh-button ghost"
-                            type="button"
-                            on:click=move |_| {
-                                set_pro_signin_open.set(false);
-                                set_pro_code.set(String::new());
-                                set_pro_error.set(None);
-                            }
-                        >
-                            {tr(locale.get(), "Annuler", "Cancel")}
-                        </button>
-                        {move || pro_error.get().map(|message| view! { <small class="error-text">{message}</small> })}
-                    </section>
-                })
-            } else {
-                None
-            }}
-
-            {move || {
-                let locale_value = locale.get();
-                match dashboard.get() {
-                    Some(data) => render_dashboard(
-                        data,
-                        selected_station.get(),
-                        set_selected_station,
-                        locale_value,
-                        loading.get(),
-                        error.get(),
-                        focus_mode.get(),
-                        live_clock,
-                        pro_mode.get(),
-                    ).into_any(),
-                    None => render_empty(locale_value, loading.get(), error.get()).into_any(),
+                    }
+                    if let Some(error) = pro_error() {
+                        span { class: "error-text", "{error}" }
+                    }
                 }
-            }}
-        </div>
+            }
+
+            match dashboard_result {
+                Some(Ok(data)) => rsx! {
+                    DashboardView {
+                        data,
+                        locale: locale(),
+                        selected_station,
+                        focus_mode: focus_mode(),
+                        pro_enabled,
+                    }
+                },
+                Some(Err(error)) => rsx! {
+                    div { class: "empty-state",
+                        h2 { "{tr(locale(), \"Données indisponibles\", \"Data unavailable\")}" }
+                        p { class: "error-text", "{error}" }
+                    }
+                },
+                None => rsx! {
+                    div { class: "empty-state",
+                        div { class: "loading-mark" }
+                        p { class: "status-line", "{tr(locale(), \"Chargement des mesures\", \"Loading measurements\")}" }
+                    }
+                },
+            }
+        }
     }
 }
 
 #[component]
-fn FocusEnterIcon() -> impl IntoView {
-    view! {
-        <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M15 3h6v6"></path>
-            <path d="M21 3l-7 7"></path>
-            <path d="M9 21H3v-6"></path>
-            <path d="M3 21l7-7"></path>
-        </svg>
-    }
-}
-
-#[component]
-fn FocusExitIcon() -> impl IntoView {
-    view! {
-        <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M14 4v6h6"></path>
-            <path d="M21 3l-7 7"></path>
-            <path d="M10 20v-6H4"></path>
-            <path d="M3 21l7-7"></path>
-        </svg>
-    }
-}
-
-fn render_empty(locale: Locale, loading: bool, error: Option<String>) -> impl IntoView {
-    view! {
-        <main class="dashboard">
-            <section class="empty-state">
-                <div class="loading-mark"></div>
-                <h2>{tr(locale, "Chargement des données", "Loading data")}</h2>
-                <p>{tr(locale, "Connexion à Hydrodaten.", "Connecting to Hydrodaten.")}</p>
-                {error.map(|message| view! { <p class="error-text">{message}</p> })}
-                <p class="status-line">
-                    {if loading {
-                        tr(locale, "Requête en cours", "Request in progress")
-                    } else {
-                        tr(locale, "En attente", "Waiting")
-                    }}
-                </p>
-            </section>
-        </main>
-    }
-}
-
-fn initial_focus_mode() -> bool {
-    web_sys::window()
-        .and_then(|window| window.location().search().ok())
-        .is_some_and(|search| {
-            search
-                .trim_start_matches('?')
-                .split('&')
-                .any(|part| matches!(part, "focus" | "focus=1" | "focus=true"))
-        })
-}
-
-fn initial_pro_mode() -> bool {
-    web_sys::window()
-        .and_then(|window| window.location().search().ok())
-        .is_some_and(|search| {
-            search
-                .trim_start_matches('?')
-                .split('&')
-                .any(|part| matches!(part, "pro" | "pro=1" | "pro=true"))
-        })
-}
-
-fn render_dashboard(
+fn DashboardView(
     data: DashboardData,
-    selected_id: String,
-    set_selected_id: WriteSignal<String>,
     locale: Locale,
-    loading: bool,
-    error: Option<String>,
+    mut selected_station: Signal<String>,
     focus_mode: bool,
-    live_clock: ReadSignal<String>,
-    pro_mode: bool,
-) -> impl IntoView {
-    let stations = data.stations.clone();
-    let selectable_stations = stations
+    pro_enabled: bool,
+) -> Element {
+    let river_stations = data
+        .stations
         .iter()
-        .filter(|station| station.kind != WaterKind::Lake)
+        .filter(|station| station.kind == WaterKind::River)
         .cloned()
         .collect::<Vec<_>>();
-    let warnings = data.warnings.clone();
-    let cache_status = data.cache_status.clone();
-    let source_label = data.source.label.clone();
-    let source_url = data.source.url.clone();
-    let generated_at = format_datetime(&data.generated_at);
-    let selected = selectable_stations
+    let selected = river_stations
         .iter()
-        .find(|station| station.id == selected_id)
-        .or_else(|| selectable_stations.first())
+        .find(|station| station.id == selected_station())
+        .or_else(|| river_stations.first())
         .cloned();
 
-    view! {
-        <main class=if focus_mode { "dashboard dashboard-focus" } else { "dashboard" }>
-            {if focus_mode {
-                None
-            } else {
-                error.map(|message| view! { <section class="notice error-text">{message}</section> })
-            }}
-            {if focus_mode || warnings.is_empty() {
-                None
-            } else {
-                Some(view! {
-                    <section class="notice">
-                        {warnings.iter().cloned().map(|warning| view! { <p>{warning}</p> }).collect_view()}
-                    </section>
-                })
-            }}
+    rsx! {
+        div { class: if focus_mode { "dashboard dashboard-focus" } else { "dashboard" },
+            if let Some(station) = selected {
+                StationPanel {
+                    station,
+                    locale,
+                    pro_enabled,
+                }
+            }
 
-            {selected.map(|station| view! { <StationPanel station=station locale=locale live_clock=live_clock pro_mode=pro_mode/> })}
+            if !focus_mode {
+                div { class: "station-tabs station-tabs-bottom",
+                    for station in river_stations {
+                        button {
+                            class: if station.id == selected_station() { "station-tab active" } else { "station-tab" },
+                            r#type: "button",
+                            onclick: move |_| selected_station.set(station.id.clone()),
+                            strong { "{station_title(&station, locale)}" }
+                            small { "{station_subtitle(&station, locale)}" }
+                        }
+                    }
+                }
 
-            {if focus_mode {
-                None
-            } else {
-                Some(view! {
-                    <section class="station-tabs station-tabs-bottom" aria-label="Stations">
-                        {selectable_stations.iter().map(|station| {
-                            let id = station.id.clone();
-                            let button_id = id.clone();
-                            let is_active = id == selected_id;
-                            view! {
-                                <button
-                                    type="button"
-                                    class=if is_active { "station-tab active" } else { "station-tab" }
-                                    data-station=station.slug.clone()
-                                    on:click=move |_| set_selected_id.set(button_id.clone())
-                                >
-                                    <strong>{station_role(station, locale)}</strong>
-                                    <small>{station_title(station, locale)}</small>
-                                </button>
-                            }
-                        }).collect_view()}
-                    </section>
-
-                    <section class="source-strip source-strip-footer">
-                        <div>
-                            <span class="label">{tr(locale, "Source", "Source")}</span>
-                            <a href=source_url target="_blank" rel="noreferrer">{source_label}</a>
-                        </div>
-                        <div>
-                            <span class="label">{tr(locale, "Dernière mise à jour", "Updated")}</span>
-                            <span>{generated_at}</span>
-                        </div>
-                        <div>
-                            <span class=if cache_status == CacheStatus::Fresh { "cache fresh" } else { "cache stale" }>
-                                {match cache_status {
-                                    CacheStatus::Fresh => tr(locale, "Données fraîches", "Fresh data"),
-                                    CacheStatus::Stale => tr(locale, "Cache ancien", "Stale cache"),
-                                }}
-                            </span>
-                        </div>
-                        {if loading {
-                            Some(view! { <span class="loading-text">{tr(locale, "Actualisation...", "Refreshing...")}</span> })
-                        } else {
-                            None
-                        }}
-                    </section>
-                })
-            }}
-        </main>
+                SourceStrip {
+                    data,
+                    locale,
+                }
+            }
+        }
     }
 }
 
 #[component]
-fn StationPanel(
-    station: StationData,
-    locale: Locale,
-    live_clock: ReadSignal<String>,
-    pro_mode: bool,
-) -> impl IntoView {
-    let mut history = station
-        .history
-        .iter()
-        .filter(|series| is_visible_metric(series.kind))
-        .cloned()
-        .collect::<Vec<_>>();
-    let forecast = if pro_mode {
-        station
-            .forecast
-            .iter()
-            .filter(|series| is_visible_metric(series.kind))
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
+fn SourceStrip(data: DashboardData, locale: Locale) -> Element {
+    let updated = format_timestamp(&data.generated_at, locale);
+    let cache_class = match data.cache_status {
+        CacheStatus::Fresh => "cache fresh",
+        CacheStatus::Stale => "cache stale",
     };
-    history.sort_by_key(|series| metric_order(series.kind));
-    let time_axis = station_time_axis(&history, &forecast);
-    let x_range = time_axis.as_ref().map(|(start, end, _)| (*start, *end));
-    let visible_x_range = x_range.map(|range| default_visible_x_range(&history, range));
-    let scroll_width = scroll_content_width(x_range, visible_x_range);
-    let axis_ticks = time_axis
-        .as_ref()
-        .map(|(_, _, ticks)| ticks.clone())
-        .unwrap_or_default();
-    let notice = station_notice(&station, locale);
-    let stack_class = if history.len() <= 1 {
-        "chart-stack single"
-    } else {
-        "chart-stack multi"
+    let cache_label = match data.cache_status {
+        CacheStatus::Fresh => tr(locale, "frais", "fresh"),
+        CacheStatus::Stale => tr(locale, "périmé", "stale"),
     };
-    let show_error_band = station.id != "2606";
-    let (hover_x, set_hover_x) = signal(None::<f64>);
 
-    view! {
-        <section class="station-panel">
-            <div class="station-heading">
-                <div>
-                    <h2>{station_role(&station, locale)}</h2>
-                    <p class="location-subtitle">{station_title(&station, locale)}</p>
-                </div>
-                <small class="page-live-clock">
-                    {move || format!("{} {}", tr(locale, "Maintenant", "Now"), live_clock.get())}
-                </small>
-            </div>
+    rsx! {
+        div { class: "source-strip source-strip-footer",
+            div {
+                span { class: "label", "{tr(locale, \"Sources\", \"Sources\")}" }
+                a { href: "{data.source.url}", target: "_blank", rel: "noreferrer", "{data.source.label}" }
+            }
+            div {
+                span { class: "label", "{tr(locale, \"Dernière mise à jour\", \"Last updated\")}" }
+                span { "{updated}" }
+            }
+            span { class: "{cache_class}", "{cache_label}" }
+            if !data.warnings.is_empty() {
+                span { class: "status-line", "{data.warnings.len()} {tr(locale, \"avert.\", \"warn.\")}" }
+            }
+        }
+    }
+}
 
-            <div class=stack_class on:mouseleave=move |_| set_hover_x.set(None)>
-                {if time_axis.is_some() {
-                    Some(view! {
-                        <TimeAxis
-                            axis_ticks=axis_ticks.clone()
-                            x_range=x_range
-                            scroll_width=scroll_width.clone()
-                            hover_x=hover_x
-                            placement="time-axis-top"
-                        />
-                    })
-                } else {
-                    None
-                }}
-                {history.iter().enumerate().map(|(index, series)| {
-                    let current = station.current.iter().find(|metric| metric.kind == series.kind).cloned();
-                    let forecast = forecast.iter().find(|forecast| forecast.kind == series.kind).cloned();
-                    let is_arve_discharge = station.id == "2170" && series.kind == MetricKind::Discharge;
-                    let is_rhone_discharge = matches!(station.id.as_str(), "2606" | "2174")
-                        && series.kind == MetricKind::Discharge;
-                    let axis_floor = (is_arve_discharge || is_rhone_discharge).then_some(0.0);
-                    let axis_min_ceiling = if is_arve_discharge {
-                        Some(150.0)
-                    } else if is_rhone_discharge {
-                        Some(600.0)
-                    } else {
-                        None
-                    };
-                    view! {
-                        <MetricChart
-                            series=series.clone()
-                            forecast=forecast
-                            current=current
-                            x_range=x_range
-                            axis_ticks=axis_ticks.clone()
-                            scroll_width=scroll_width.clone()
-                            locale=locale
-                            show_error_band=show_error_band
-                            axis_floor=axis_floor
-                            axis_min_ceiling=axis_min_ceiling
-                            discharge_risk_reference=axis_min_ceiling
-                            hover_x=hover_x
-                            set_hover_x=set_hover_x
-                        />
-                        {if time_axis.is_some() && index + 1 < history.len() {
-                            Some(view! {
-                                <TimeAxis
-                                    axis_ticks=axis_ticks.clone()
-                                    x_range=x_range
-                                    scroll_width=scroll_width.clone()
-                                    hover_x=hover_x
-                                    placement="time-axis-middle"
-                                />
-                            })
-                        } else {
-                            None
-                        }}
+#[component]
+fn StationPanel(station: StationData, locale: Locale, pro_enabled: bool) -> Element {
+    let hover_state = use_signal(|| None::<HoverState>);
+    let domain = station_time_domain(&station, pro_enabled);
+    let discharge_history = series_for_kind(&station.history, MetricKind::Discharge);
+    let discharge_forecast = if pro_enabled {
+        series_for_kind(&station.forecast, MetricKind::Discharge)
+    } else {
+        None
+    };
+    let temperature_history = series_for_kind(&station.history, MetricKind::Temperature);
+    let temperature_forecast = if pro_enabled {
+        series_for_kind(&station.forecast, MetricKind::Temperature)
+    } else {
+        None
+    };
+    let station_notice = match locale {
+        Locale::Fr => station.notice_fr.clone(),
+        Locale::En => station.notice_en.clone(),
+    };
+    let latest_measurement = latest_station_measurement(&station, locale);
+
+    rsx! {
+        article { class: "station-panel",
+            div { class: "station-heading",
+                div {
+                    h2 { "{station_title(&station, locale)}" }
+                    p { class: "location-subtitle", "{station_subtitle(&station, locale)}" }
+                    if let Some(latest_measurement) = latest_measurement {
+                        p { class: "station-last-measure",
+                            span { "{tr(locale, \"Dernière mesure\", \"Latest measurement\")}" }
+                            time { "{latest_measurement}" }
+                        }
                     }
-                }).collect_view()}
-                {if time_axis.is_some() {
-                    Some(view! {
-                        <TimeAxis
-                            axis_ticks=axis_ticks.clone()
-                            x_range=x_range
-                            scroll_width=scroll_width.clone()
-                            hover_x=hover_x
-                            placement="time-axis-bottom"
-                        />
-                    })
-                } else {
-                    None
-                }}
-            </div>
-            {notice.map(|message| view! {
-                <p class="station-footnote">
-                    <strong>{tr(locale, "Estimation", "Estimate")}</strong>
-                    <span>{message}</span>
-                </p>
-            })}
-        </section>
+                }
+            }
+
+            div { class: "chart-stack",
+                TimeAxis {
+                    domain: domain.clone(),
+                    placement: "top".to_string(),
+                    locale,
+                    hover_state,
+                }
+
+                {metric_chart(
+                    &station,
+                    MetricKind::Temperature,
+                    temperature_history,
+                    temperature_forecast,
+                    &domain,
+                    locale,
+                    hover_state,
+                )}
+
+                TimeAxis {
+                    domain: domain.clone(),
+                    placement: "middle".to_string(),
+                    locale,
+                    hover_state,
+                }
+
+                {metric_chart(
+                    &station,
+                    MetricKind::Discharge,
+                    discharge_history,
+                    discharge_forecast,
+                    &domain,
+                    locale,
+                    hover_state,
+                )}
+
+                TimeAxis {
+                    domain,
+                    placement: "bottom".to_string(),
+                    locale,
+                    hover_state,
+                }
+            }
+
+            if let Some(notice) = station_notice {
+                p { class: "station-footnote",
+                    strong { "{tr(locale, \"Note\", \"Note\")}" }
+                    span { "{notice}" }
+                }
+            }
+        }
     }
 }
 
 #[component]
 fn TimeAxis(
-    axis_ticks: Vec<AxisTick>,
-    x_range: Option<(f64, f64)>,
-    scroll_width: String,
-    hover_x: ReadSignal<Option<f64>>,
-    placement: &'static str,
-) -> impl IntoView {
-    let class_name = format!("shared-time-axis {placement}");
-
-    view! {
-        <div class=class_name>
-            <div class="shared-axis-frame">
-                <div class="axis-scroll-viewport chart-scroll-sync" on:scroll=sync_chart_scroll>
-                    <div class="axis-scroll-content" style=format!("width: {scroll_width};")>
-                        <div class="axis-rule axis-rule-top" aria-hidden="true">
-                            {axis_ticks.iter().map(|tick| {
-                                let style = format!("left: {:.3}%;", tick.position);
-                                view! {
-                                    <span class=axis_tick_class(tick.kind) style=style></span>
-                                }
-                            }).collect_view()}
-                            {move || axis_hover_marker(x_range, hover_x)}
-                        </div>
-                        <div class="axis-labels">
-                            {axis_ticks.iter().filter(|tick| !tick.label.is_empty()).map(|tick| {
-                                let style = format!("left: {:.3}%;", tick.position);
-                                view! {
-                                    <span class=axis_label_class(tick) style=style>{tick.label.clone()}</span>
-                                }
-                            }).collect_view()}
-                        </div>
-                        <div class="axis-rule axis-rule-bottom" aria-hidden="true">
-                            {axis_ticks.iter().map(|tick| {
-                                let style = format!("left: {:.3}%;", tick.position);
-                                view! {
-                                    <span class=axis_tick_class(tick.kind) style=style></span>
-                                }
-                            }).collect_view()}
-                            {move || axis_hover_marker(x_range, hover_x)}
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="axis-spacer"></div>
-        </div>
-    }
-}
-
-#[component]
-fn MetricChart(
-    series: MetricSeries,
-    forecast: Option<MetricSeries>,
-    current: Option<CurrentMetric>,
-    x_range: Option<(f64, f64)>,
-    axis_ticks: Vec<AxisTick>,
-    scroll_width: String,
+    domain: TimeDomain,
+    placement: String,
     locale: Locale,
-    show_error_band: bool,
-    axis_floor: Option<f64>,
-    axis_min_ceiling: Option<f64>,
-    discharge_risk_reference: Option<f64>,
-    hover_x: ReadSignal<Option<f64>>,
-    set_hover_x: WriteSignal<Option<f64>>,
-) -> impl IntoView {
-    let title = series_label(&series, locale);
-    let unit = series.unit.clone();
-    let class = match series.kind {
-        MetricKind::Discharge => "chart-card discharge",
-        MetricKind::WaterLevel => "chart-card level",
-        MetricKind::Temperature => "chart-card temperature",
-    };
-    let has_forecast = forecast
-        .as_ref()
-        .is_some_and(|forecast| !forecast.points.is_empty());
-    let points = chart_points(&series, forecast.as_ref());
-    let hover_points = points.clone();
-    let current_axis_value = current.as_ref().map(|metric| metric.value);
-    let chart_x_range = x_range.or_else(|| points_x_range(&points));
-    let value_axis = metric_value_axis(
-        series.kind,
-        &points,
-        series.uncertainty.as_ref(),
-        current_axis_value,
-        axis_floor,
-        axis_min_ceiling,
+    hover_state: Signal<Option<HoverState>>,
+) -> Element {
+    let axis_class = format!("shared-time-axis time-axis-{placement}");
+    let width_style = format!(
+        "width: {:.3}%; min-width: var(--chart-content-min-width, 100%);",
+        domain.content_width_percent
     );
-    let chart_y_range = value_axis.as_ref().map(|axis| (axis.min, axis.max));
-    let hover_y_range = chart_y_range;
-    let y_ticks = value_axis
-        .as_ref()
-        .map(|axis| axis.ticks.clone())
-        .unwrap_or_default();
-    let band_path = show_error_band
-        .then(|| error_band_path(&series, chart_x_range, chart_y_range))
-        .flatten();
-    let sun_bands = chart_x_range.map(sun_bands).unwrap_or_default();
-    let history_area_segments = if series.kind == MetricKind::Discharge {
-        segmented_area_paths(
-            &points,
-            |point| point.history_y,
-            chart_x_range,
-            chart_y_range,
-            discharge_risk_reference,
-        )
-    } else {
-        Vec::new()
-    };
-    let forecast_area_segments = if series.kind == MetricKind::Discharge && has_forecast {
-        segmented_area_paths(
-            &points,
-            |point| point.forecast_y,
-            chart_x_range,
-            chart_y_range,
-            discharge_risk_reference,
-        )
-    } else {
-        Vec::new()
-    };
-    let history_segments = if series.kind == MetricKind::Discharge {
-        segmented_line_paths(
-            &points,
-            |point| point.history_y,
-            chart_x_range,
-            chart_y_range,
-            discharge_risk_reference,
-        )
-    } else {
-        Vec::new()
-    };
-    let forecast_segments = if series.kind == MetricKind::Discharge && has_forecast {
-        segmented_line_paths(
-            &points,
-            |point| point.forecast_y,
-            chart_x_range,
-            chart_y_range,
-            discharge_risk_reference,
-        )
-    } else {
-        Vec::new()
-    };
-    let history_path = (series.kind != MetricKind::Discharge)
-        .then(|| {
-            line_path(
-                &points,
-                |point| point.history_y,
-                chart_x_range,
-                chart_y_range,
-            )
-        })
-        .flatten();
-    let history_area_path = (series.kind != MetricKind::Discharge)
-        .then(|| {
-            area_path(
-                &points,
-                |point| point.history_y,
-                chart_x_range,
-                chart_y_range,
-            )
-        })
-        .flatten();
-    let forecast_path = if series.kind != MetricKind::Discharge && has_forecast {
-        line_path(
-            &points,
-            |point| point.forecast_y,
-            chart_x_range,
-            chart_y_range,
-        )
-    } else {
-        None
-    };
-    let forecast_area_path = if series.kind != MetricKind::Discharge && has_forecast {
-        area_path(
-            &points,
-            |point| point.forecast_y,
-            chart_x_range,
-            chart_y_range,
-        )
-    } else {
-        None
-    };
-    let axis_title = metric_axis_title(series.kind, &unit, locale);
-    let chart_label = axis_title.clone();
-    let plot_title = title.clone();
-    let history_colour = metric_colour(series.kind).to_string();
+    let hover_position = hover_state()
+        .map(|hover| hover.position)
+        .filter(|position| (0.0..=100.0).contains(position));
 
-    let current_value = current
-        .as_ref()
-        .map(|metric| format!("{} {}", format_value(metric.value), metric.unit))
-        .unwrap_or_else(|| tr(locale, "n/d", "n/a").to_string());
-    let current_numeric_value = current_axis_value;
-    let current_at = current
-        .as_ref()
-        .map(|metric| format_datetime(&metric.measured_at))
-        .unwrap_or_else(|| tr(locale, "non disponible", "unavailable").to_string());
-    let hover_unit = unit.clone();
-    let hover_x_range = x_range.or_else(|| points_x_range(&points));
-    let update_hover = move |event: web_sys::MouseEvent| {
-        let Some((start, end)) = hover_x_range else {
-            set_hover_x.set(None);
-            return;
-        };
-        let Some(target) = event
-            .current_target()
-            .and_then(|target| target.dyn_into::<web_sys::HtmlElement>().ok())
-        else {
-            set_hover_x.set(None);
-            return;
-        };
-
-        let rect = target.get_bounding_client_rect();
-        let scroll_width = (target.scroll_width() as f64).max(1.0);
-        if rect.width() <= 0.0 || end <= start {
-            set_hover_x.set(None);
-            return;
-        }
-
-        let local_x = event.client_x() as f64 - rect.left();
-        let ratio = ((local_x + target.scroll_left() as f64) / scroll_width).clamp(0.0, 1.0);
-        let x = start + ratio * (end - start);
-        set_hover_x.set(Some(x));
-    };
-    let hovered = Memo::new(move |_| {
-        let x = hover_x.get()?;
-        let x_range = hover_x_range?;
-        let y_range = hover_y_range?;
-        nearest_hover_metric(&hover_points, x, &hover_unit, x_range, y_range)
-    });
-    let current_value_fallback = current_value.clone();
-    let current_at_fallback = current_at.clone();
-    let readout_value = move || {
-        hovered
-            .get()
-            .map(|metric| format!("{} {}", format_value(metric.value), metric.unit))
-            .unwrap_or_else(|| current_value_fallback.clone())
-    };
-    let readout_timestamp = move || {
-        hovered
-            .get()
-            .map(|metric| metric.timestamp)
-            .unwrap_or_else(|| current_at_fallback.clone())
-    };
-    let discharge_safety = Memo::new(move |_| {
-        if series.kind != MetricKind::Discharge {
-            return None;
-        }
-
-        hovered
-            .get()
-            .map(|metric| metric.value)
-            .or(current_numeric_value)
-            .map(|value| discharge_safety_for_value(value, discharge_risk_reference))
-    });
-    let readout_value_class = move || {
-        discharge_safety
-            .get()
-            .map(|safety| format!("readout-value {}", discharge_safety_class(safety)))
-            .unwrap_or_else(|| "readout-value".to_string())
-    };
-    let discharge_comment = move || {
-        discharge_safety.get().map(|safety| {
-            (
-                discharge_safety_class(safety),
-                discharge_safety_label(safety, locale),
-            )
-        })
-    };
-
-    view! {
-        <article class=class>
-            <div class="plot-row">
-                <div class="chart-frame">
-                    <div class="custom-chart" aria-label=chart_label>
-                        <div class="custom-y-axis" aria-hidden="true">
-                            <span class="custom-y-axis-title">{axis_title}</span>
-                            {y_ticks.iter().map(|tick| {
-                                view! {
-                                    <span
-                                        class="custom-y-tick"
-                                        style=format!("top: {:.6}%;", tick.position)
-                                    >
-                                        {tick.label.clone()}
-                                    </span>
+    rsx! {
+        div { class: "{axis_class}",
+            div { class: "shared-axis-frame",
+                if placement == "top" {
+                    div { class: "axis-range-label", "{time_axis_range_label(&domain, locale)}" }
+                }
+                div {
+                    class: "axis-scroll-viewport scroll-sync",
+                    onscroll: move |event| sync_chart_scroll(event),
+                    div { class: "axis-scroll-content", style: "{width_style}",
+                        div { class: "axis-rule axis-rule-top",
+                            for tick in domain.ticks.iter() {
+                                span {
+                                    class: format!("axis-tick-mark {}", tick_kind_class(tick.kind)),
+                                    style: format!("left: {:.3}%;", tick.position),
                                 }
-                            }).collect_view()}
-                        </div>
-                        <div class="plot-scroll-viewport chart-scroll-sync" on:scroll=sync_chart_scroll on:mousemove=update_hover>
-                            <div class="plot-scroll-content" style=format!("width: {scroll_width};")>
-                                <div class="custom-plot-area">
-                                    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
-                                        <g class="sun-shading">
-                                            {sun_bands.iter().map(|band| {
-                                                view! {
-                                                    <rect
-                                                        x=format!("{:.3}", band.x)
-                                                        y="0"
-                                                        width=format!("{:.3}", band.width)
-                                                        height="100"
-                                                    ></rect>
-                                                }
-                                            }).collect_view()}
-                                        </g>
-                                        <g class="custom-grid-x">
-                                            {axis_ticks.iter().filter_map(|tick| {
-                                                if tick.kind != AxisTickKind::Day || tick.position <= 0.0 || tick.position >= 100.0 {
-                                                    return None;
-                                                }
-                                                let x = format!("{:.3}", tick.position / 100.0 * SVG_PLOT_WIDTH);
-                                                Some(view! {
-                                                    <line x1=x.clone() x2=x y1="0" y2="100"></line>
-                                                })
-                                            }).collect_view()}
-                                        </g>
-                                        <g class="custom-grid-y">
-                                            {y_ticks.iter().enumerate().filter_map(|(index, tick)| {
-                                                if index == 0 || index + 1 == y_ticks.len() {
-                                                    return None;
-                                                }
-                                                let y = format!("{:.3}", tick.position);
-                                                Some(view! {
-                                                    <line x1="0" x2="1000" y1=y.clone() y2=y></line>
-                                                })
-                                            }).collect_view()}
-                                        </g>
-                                        {history_area_segments.iter().map(|segment| view! {
-                                            <path
-                                                class=format!("custom-area history {}", discharge_safety_class(segment.safety))
-                                                d=segment.path.clone()
-                                            ></path>
-                                        }).collect_view()}
-                                        {history_area_path.map(|path| {
-                                            let fill = history_colour.clone();
-                                            view! {
-                                                <path class="custom-area history" fill=fill d=path></path>
-                                            }
-                                        })}
-                                        {forecast_area_segments.iter().map(|segment| view! {
-                                            <path
-                                                class=format!("custom-area forecast {}", discharge_safety_class(segment.safety))
-                                                d=segment.path.clone()
-                                            ></path>
-                                        }).collect_view()}
-                                        {forecast_area_path.map(|path| view! {
-                                            <path class="custom-area forecast" d=path></path>
-                                        })}
-                                        {band_path.map(|path| view! {
-                                            <path class="uncertainty-band" d=path></path>
-                                        })}
-                                        {history_segments.iter().map(|segment| view! {
-                                            <path
-                                                class=format!("custom-line history {}", discharge_safety_class(segment.safety))
-                                                d=segment.path.clone()
-                                            ></path>
-                                        }).collect_view()}
-                                        {history_path.map(|path| {
-                                            let stroke = history_colour.clone();
-                                            view! {
-                                                <path class="custom-line history" stroke=stroke d=path></path>
-                                            }
-                                        })}
-                                        {forecast_segments.iter().map(|segment| view! {
-                                            <path
-                                                class=format!("custom-line forecast {}", discharge_safety_class(segment.safety))
-                                                d=segment.path.clone()
-                                            ></path>
-                                        }).collect_view()}
-                                        {forecast_path.map(|path| view! {
-                                            <path class="custom-line forecast" d=path></path>
-                                        })}
-                                    </svg>
-                                    {move || hovered.get().map(|metric| {
-                                        let cursor_style = format!("left: {:.6}%;", metric.cursor_ratio * 100.0);
-                                        let point_style = format!(
-                                            "left: {:.6}%; top: {:.6}%;",
-                                            metric.cursor_ratio * 100.0,
-                                            metric.point_ratio * 100.0,
-                                        );
-                                        view! {
-                                            <div class="hover-cursor" aria-hidden="true">
-                                                <span class="hover-cursor-line" style=cursor_style></span>
-                                                <span class="hover-cursor-point" style=point_style></span>
-                                            </div>
-                                        }
-                                    })}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <aside class="plot-current">
-                    <div class="plot-current-heading">
-                        <h3>{plot_title}</h3>
-                    </div>
-                    <div class="plot-readout">
-                        <strong class=readout_value_class>{readout_value}</strong>
-                        {move || discharge_comment().map(|(class, label)| view! {
-                            <small class=format!("discharge-comment {class}")>{label}</small>
-                        })}
-                        <small class="readout-context">
-                            {move || format!("{} {}", tr(locale, "Mesuré", "Measured"), readout_timestamp())}
-                        </small>
-                    </div>
-                </aside>
-            </div>
-        </article>
+                            }
+                            if let Some(position) = hover_position {
+                                span {
+                                    class: "axis-hover-tick",
+                                    style: format!("left: {:.3}%;", position),
+                                }
+                            }
+                        }
+                        div { class: "axis-labels",
+                            for tick in domain.ticks.iter() {
+                                span {
+                                    class: "{axis_label_class(tick)}",
+                                    style: format!("left: {:.3}%;", tick.position),
+                                    span { class: "axis-label-full", "{axis_label_full(tick)}" }
+                                    span { class: "axis-label-wide", "{axis_label_wide(tick, locale)}" }
+                                    span { class: "axis-label-medium", "{axis_label_medium(tick, locale)}" }
+                                    span { class: "axis-label-short", "{axis_label_short(tick, locale)}" }
+                                }
+                            }
+                        }
+                        div { class: "axis-rule axis-rule-bottom",
+                            for tick in domain.ticks.iter() {
+                                span {
+                                    class: format!("axis-tick-mark {}", tick_kind_class(tick.kind)),
+                                    style: format!("left: {:.3}%;", tick.position),
+                                }
+                            }
+                            if let Some(position) = hover_position {
+                                span {
+                                    class: "axis-hover-tick",
+                                    style: format!("left: {:.3}%;", position),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "axis-spacer" }
+        }
     }
 }
 
-async fn load_dashboard() -> Result<DashboardData, String> {
-    let response = Request::get("/api/dashboard")
-        .send()
-        .await
-        .map_err(|err| format!("Network error: {err}"))?;
+fn metric_chart(
+    station: &StationData,
+    kind: MetricKind,
+    history: Option<&MetricSeries>,
+    forecast: Option<&MetricSeries>,
+    domain: &TimeDomain,
+    locale: Locale,
+    mut hover_state: Signal<Option<HoverState>>,
+) -> Element {
+    let history_points = history
+        .map(|series| timed_points(&series.points))
+        .unwrap_or_default();
+    let forecast_points = forecast
+        .map(|series| timed_points(&series.points))
+        .unwrap_or_default();
+    let history_points = points_in_domain(&history_points, domain);
+    let forecast_points = points_in_domain(&forecast_points, domain);
+    let unit = history
+        .or(forecast)
+        .map(|series| series.unit.clone())
+        .or_else(|| current_for_kind(station, kind).map(|metric| metric.unit.clone()))
+        .unwrap_or_else(|| default_unit(kind).to_string());
+    let axis = value_axis(station, kind, &history_points, &forecast_points);
+    let width_style = format!(
+        "width: {:.3}%; min-width: var(--chart-content-min-width, 100%);",
+        domain.content_width_percent
+    );
+    let current = current_for_kind(station, kind);
+    let hovered = hover_state()
+        .and_then(|hover| sample_point_at(hover.timestamp, &history_points, &forecast_points));
+    let readout_value = hovered
+        .as_ref()
+        .map(|point| point.value)
+        .or_else(|| current.map(|metric| metric.value));
+    let formatted_value = readout_value
+        .map(|value| format_metric_value(value, &unit, kind))
+        .unwrap_or_else(|| "—".to_string());
+    let discharge_reference = if kind == MetricKind::Discharge {
+        Some(discharge_reference_max(station))
+    } else {
+        None
+    };
+    let safety = if kind == MetricKind::Discharge {
+        discharge_reference
+            .and_then(|reference| readout_value.map(|value| discharge_safety(value, reference)))
+    } else {
+        None
+    };
+    let risk_axis_segments = discharge_reference
+        .map(|reference| discharge_risk_axis_segments(&axis, reference))
+        .unwrap_or_default();
+    let y_axis_class = if risk_axis_segments.is_empty() {
+        "custom-y-axis"
+    } else {
+        "custom-y-axis has-risk-scale"
+    };
+    let y_axis_right_class = if risk_axis_segments.is_empty() {
+        "custom-y-axis custom-y-axis-right"
+    } else {
+        "custom-y-axis custom-y-axis-right has-risk-scale"
+    };
+    let chart_class = safety
+        .map(|safety| {
+            format!(
+                "chart-card {} {}",
+                metric_kind_class(kind),
+                safety_class(safety)
+            )
+        })
+        .unwrap_or_else(|| format!("chart-card {}", metric_kind_class(kind)));
+    let readout_class = safety
+        .map(|safety| format!("readout-value {}", safety_class(safety)))
+        .unwrap_or_else(|| "readout-value".to_string());
+    let hover_time = hovered
+        .as_ref()
+        .map(|point| format_timestamp_from_seconds(point.timestamp, locale));
+    let hover_position = hover_state()
+        .map(|hover| hover.position)
+        .filter(|position| (0.0..=100.0).contains(position));
+    let hover_point = hover_state().and_then(|hover| {
+        sample_point_at(hover.timestamp, &history_points, &forecast_points)
+            .map(|point| (hover.position, value_position(point.value, &axis)))
+    });
+    let domain_min = domain.min;
+    let domain_span = (domain.max - domain.min).max(1.0);
+    let history_path = line_path(&history_points, domain, &axis);
+    let history_area = area_path(&history_points, domain, &axis);
+    let forecast_path = line_path(&forecast_points, domain, &axis);
+    let forecast_area = area_path(&forecast_points, domain, &axis);
+    let show_uncertainty = station.id != "2606";
+    let uncertainty_path = history
+        .and_then(|series| series.uncertainty.as_ref())
+        .filter(|_| show_uncertainty)
+        .and_then(|uncertainty| uncertainty_band_path(&history_points, uncertainty, domain, &axis));
 
-    if !response.ok() {
-        return Err(format!(
-            "Hydrodaten API returned HTTP {}",
-            response.status()
+    rsx! {
+        div { class: "{chart_class}",
+            div { class: "plot-row",
+                div { class: "chart-frame",
+                    div { class: "custom-chart",
+                        div { class: "{y_axis_class}",
+                            div { class: "custom-y-axis-title", "{axis_title(kind, locale, &unit)}" }
+                            if !risk_axis_segments.is_empty() {
+                                div { class: "risk-axis-scale", aria_hidden: "true",
+                                    for segment in risk_axis_segments.iter() {
+                                        div {
+                                            class: format!("risk-axis-segment {}", segment.class_name),
+                                            style: format!("top: {:.3}%; height: {:.3}%;", segment.top, segment.height),
+                                        }
+                                    }
+                                }
+                            }
+                            for tick in axis.ticks.iter() {
+                                span {
+                                    class: value_tick_class(kind, tick, discharge_reference),
+                                    style: format!("top: {:.3}%;", tick.position),
+                                    "{tick.label}"
+                                }
+                            }
+                        }
+                        div { class: "{y_axis_right_class}",
+                            div { class: "custom-y-axis-title", "{axis_title(kind, locale, &unit)}" }
+                            if !risk_axis_segments.is_empty() {
+                                div { class: "risk-axis-scale", aria_hidden: "true",
+                                    for segment in risk_axis_segments.iter() {
+                                        div {
+                                            class: format!("risk-axis-segment {}", segment.class_name),
+                                            style: format!("top: {:.3}%; height: {:.3}%;", segment.top, segment.height),
+                                        }
+                                    }
+                                }
+                            }
+                            for tick in axis.ticks.iter() {
+                                span {
+                                    class: value_tick_class(kind, tick, discharge_reference),
+                                    style: format!("top: {:.3}%;", tick.position),
+                                    "{tick.label}"
+                                }
+                            }
+                        }
+
+                        div { class: "custom-plot-area",
+                            div {
+                                class: "plot-scroll-viewport scroll-sync",
+                                onscroll: move |event| sync_chart_scroll(event),
+                                div {
+                                    class: "plot-scroll-content",
+                                    style: "{width_style}",
+                                    svg {
+                                        view_box: "0 0 1000 100",
+                                        preserve_aspect_ratio: "none",
+                                        g { class: "sun-shading",
+                                            for band in domain.sun_bands.iter() {
+                                                rect {
+                                                    x: format!("{:.3}", band.x * SVG_PLOT_WIDTH / 100.0),
+                                                    y: "0",
+                                                    width: format!("{:.3}", band.width * SVG_PLOT_WIDTH / 100.0),
+                                                    height: "{SVG_PLOT_HEIGHT}",
+                                                }
+                                            }
+                                        }
+                                        g { class: "custom-grid-y",
+                                            for tick in axis.ticks.iter() {
+                                                line {
+                                                    x1: "0",
+                                                    x2: "{SVG_PLOT_WIDTH}",
+                                                    y1: format!("{:.3}", tick.position),
+                                                    y2: format!("{:.3}", tick.position),
+                                                }
+                                            }
+                                        }
+                                        g { class: "custom-grid-x",
+                                            for tick in domain.ticks.iter() {
+                                                line {
+                                                    x1: format!("{:.3}", tick.position * SVG_PLOT_WIDTH / 100.0),
+                                                    x2: format!("{:.3}", tick.position * SVG_PLOT_WIDTH / 100.0),
+                                                    y1: "0",
+                                                    y2: "{SVG_PLOT_HEIGHT}",
+                                                }
+                                            }
+                                        }
+                                        if let Some(path) = uncertainty_path {
+                                            path {
+                                                class: "uncertainty-band",
+                                                d: "{path}",
+                                            }
+                                        }
+                                        if kind == MetricKind::Discharge {
+                                            if let Some(area) = history_area {
+                                                path {
+                                                    class: "custom-area discharge",
+                                                    d: "{area}",
+                                                }
+                                            }
+                                            if let Some(path) = history_path {
+                                                path {
+                                                    class: "custom-line discharge",
+                                                    d: "{path}",
+                                                }
+                                            }
+                                        } else {
+                                            if let Some(path) = history_path {
+                                                path {
+                                                    class: "custom-line temperature",
+                                                    d: "{path}",
+                                                }
+                                            }
+                                        }
+                                        if kind != MetricKind::Temperature {
+                                            if let Some(area) = forecast_area {
+                                                path {
+                                                    class: "custom-area forecast",
+                                                    d: "{area}",
+                                                }
+                                            }
+                                        }
+                                        if let Some(path) = forecast_path {
+                                            path {
+                                                class: format!("custom-line forecast {}", metric_kind_class(kind)),
+                                                d: "{path}",
+                                            }
+                                        }
+                                    }
+
+                                    div {
+                                        class: "hover-capture",
+                                        onmousemove: move |event: MouseEvent| {
+                                            if let Some(ratio) = mouse_ratio(&event) {
+                                                let timestamp = domain_min + ratio * domain_span;
+                                                hover_state.set(Some(HoverState {
+                                                    timestamp,
+                                                    position: ratio * 100.0,
+                                                }));
+                                            }
+                                        },
+                                        onmouseleave: move |_| hover_state.set(None),
+                                    }
+
+                                    if let Some(position) = hover_position {
+                                        div { class: "hover-cursor",
+                                            div {
+                                                class: "hover-cursor-line",
+                                                style: format!("left: {:.3}%;", position),
+                                            }
+                                            if let Some((x, y)) = hover_point {
+                                                div {
+                                                    class: "hover-cursor-point",
+                                                    style: format!("left: {:.3}%; top: {:.3}%;", x, y),
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                div { class: "plot-current",
+                    div { class: "plot-current-heading",
+                        h3 { "{metric_title(kind, locale)}" }
+                        if let Some(hover_time) = hover_time.clone() {
+                            small { "{hover_time}" }
+                        }
+                    }
+                    div { class: "plot-readout",
+                        strong { class: "{readout_class}", "{formatted_value}" }
+                        if let Some(safety) = safety {
+                            span {
+                                class: format!("discharge-comment {}", safety_class(safety)),
+                                "{safety_label(safety, locale)}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn station_time_domain(_station: &StationData, _pro_enabled: bool) -> TimeDomain {
+    let today = Local::now().date_naive();
+    let end_date = today + Duration::days(1);
+    let start_date = end_date - Duration::days(5);
+    let fallback_end = Local::now() + Duration::hours(12);
+    let end = local_datetime(end_date, 0, 0, 0).unwrap_or(fallback_end);
+    let start = local_datetime(start_date, 0, 0, 0).unwrap_or(end - Duration::days(5));
+    let min = start.timestamp() as f64;
+    let max = end.timestamp() as f64;
+
+    TimeDomain {
+        min,
+        max,
+        visible_max: max,
+        ticks: time_ticks(min, max),
+        sun_bands: sun_bands(min, max),
+        content_width_percent: 100.0,
+    }
+}
+
+fn series_for_kind(series: &[MetricSeries], kind: MetricKind) -> Option<&MetricSeries> {
+    series.iter().find(|series| series.kind == kind)
+}
+
+fn current_for_kind(station: &StationData, kind: MetricKind) -> Option<&CurrentMetric> {
+    station.current.iter().find(|metric| metric.kind == kind)
+}
+
+fn latest_station_measurement(station: &StationData, locale: Locale) -> Option<String> {
+    station
+        .current
+        .iter()
+        .filter_map(|metric| {
+            timestamp_seconds(&metric.measured_at)
+                .map(|timestamp| (timestamp, metric.measured_at.as_str()))
+        })
+        .chain(station.history.iter().flat_map(|series| {
+            series.points.iter().filter_map(|point| {
+                timestamp_seconds(&point.timestamp)
+                    .map(|timestamp| (timestamp, point.timestamp.as_str()))
+            })
+        }))
+        .max_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(_, timestamp)| format_timestamp(timestamp, locale))
+}
+
+fn timed_points(points: &[HistoryPoint]) -> Vec<TimedPoint> {
+    points
+        .iter()
+        .filter_map(|point| {
+            let timestamp = timestamp_seconds(&point.timestamp)?;
+            Some(TimedPoint {
+                timestamp,
+                value: point.value,
+                label: point.timestamp.clone(),
+            })
+        })
+        .collect()
+}
+
+fn points_in_domain(points: &[TimedPoint], domain: &TimeDomain) -> Vec<TimedPoint> {
+    points
+        .iter()
+        .filter(|point| point.timestamp >= domain.min && point.timestamp <= domain.max)
+        .cloned()
+        .collect()
+}
+
+fn timestamp_seconds(value: &str) -> Option<f64> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis() as f64 / 1000.0)
+}
+
+fn value_axis(
+    station: &StationData,
+    kind: MetricKind,
+    history: &[TimedPoint],
+    forecast: &[TimedPoint],
+) -> ValueAxis {
+    match kind {
+        MetricKind::Temperature => ValueAxis {
+            min: 5.0,
+            max: 30.0,
+            ticks: vec![
+                ValueTick {
+                    label: "30".to_string(),
+                    value: 30.0,
+                    position: 0.0,
+                },
+                ValueTick {
+                    label: "20".to_string(),
+                    value: 20.0,
+                    position: value_position(20.0, &ValueAxis::bare(5.0, 30.0)),
+                },
+                ValueTick {
+                    label: "10".to_string(),
+                    value: 10.0,
+                    position: value_position(10.0, &ValueAxis::bare(5.0, 30.0)),
+                },
+                ValueTick {
+                    label: "5".to_string(),
+                    value: 5.0,
+                    position: 100.0,
+                },
+            ],
+        },
+        MetricKind::Discharge => {
+            let observed_max = history
+                .iter()
+                .chain(forecast.iter())
+                .map(|point| point.value)
+                .chain(current_for_kind(station, kind).map(|metric| metric.value))
+                .reduce(f64::max)
+                .unwrap_or(0.0);
+            let base_max: f64 = if station.id == "2170" { 150.0 } else { 600.0 };
+            let max = base_max.max((observed_max * 1.08).ceil());
+            let mut ticks = Vec::new();
+            for fraction in [1.0, 0.75, 0.5, 0.25, 0.0] {
+                let value = max * fraction;
+                ticks.push(ValueTick {
+                    label: format!("{value:.0}"),
+                    value,
+                    position: value_position(value, &ValueAxis::bare(0.0, max)),
+                });
+            }
+            ValueAxis {
+                min: 0.0,
+                max,
+                ticks,
+            }
+        }
+        MetricKind::WaterLevel => ValueAxis::bare(0.0, 1.0),
+    }
+}
+
+impl ValueAxis {
+    fn bare(min: f64, max: f64) -> Self {
+        Self {
+            min,
+            max,
+            ticks: Vec::new(),
+        }
+    }
+}
+
+fn line_path(points: &[TimedPoint], domain: &TimeDomain, axis: &ValueAxis) -> Option<String> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    Some(
+        points
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                let prefix = if index == 0 { "M" } else { "L" };
+                format!(
+                    "{prefix} {:.3} {:.3}",
+                    x_coordinate(point.timestamp, domain),
+                    y_coordinate(point.value, axis)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn area_path(points: &[TimedPoint], domain: &TimeDomain, axis: &ValueAxis) -> Option<String> {
+    if points.len() < 2 {
+        return None;
+    }
+    let first = points.first()?;
+    let last = points.last()?;
+    let mut path = format!(
+        "M {:.3} {:.3}",
+        x_coordinate(first.timestamp, domain),
+        SVG_PLOT_HEIGHT
+    );
+    for point in points {
+        path.push_str(&format!(
+            " L {:.3} {:.3}",
+            x_coordinate(point.timestamp, domain),
+            y_coordinate(point.value, axis)
         ));
     }
-
-    response
-        .json::<DashboardData>()
-        .await
-        .map_err(|err| format!("Invalid API payload: {err}"))
+    path.push_str(&format!(
+        " L {:.3} {:.3} Z",
+        x_coordinate(last.timestamp, domain),
+        SVG_PLOT_HEIGHT
+    ));
+    Some(path)
 }
 
-fn register_service_worker() {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let navigator = window.navigator();
-    let container = navigator.service_worker();
-    let _ = container.register("sw.js");
-}
-
-fn station_title(station: &StationData, locale: Locale) -> String {
-    match locale {
-        Locale::Fr => station.name_fr.clone(),
-        Locale::En => station.name_en.clone(),
+fn uncertainty_band_path(
+    points: &[TimedPoint],
+    uncertainty: &MetricUncertainty,
+    domain: &TimeDomain,
+    axis: &ValueAxis,
+) -> Option<String> {
+    if points.len() < 2 {
+        return None;
     }
-}
 
-fn station_role(station: &StationData, locale: Locale) -> String {
-    match locale {
-        Locale::Fr => station.role_fr.clone(),
-        Locale::En => station.role_en.clone(),
+    let mut upper = Vec::new();
+    let mut lower = Vec::new();
+    for point in points {
+        upper.push(format!(
+            "{:.3} {:.3}",
+            x_coordinate(point.timestamp, domain),
+            y_coordinate(point.value + uncertainty.upper, axis)
+        ));
+        lower.push(format!(
+            "{:.3} {:.3}",
+            x_coordinate(point.timestamp, domain),
+            y_coordinate(point.value - uncertainty.lower, axis)
+        ));
     }
+    lower.reverse();
+    Some(format!("M {} L {} Z", upper.join(" L "), lower.join(" L ")))
 }
 
-fn station_notice(station: &StationData, locale: Locale) -> Option<String> {
-    match locale {
-        Locale::Fr => station.notice_fr.clone(),
-        Locale::En => station.notice_en.clone(),
+fn sample_point_at(
+    timestamp: f64,
+    history: &[TimedPoint],
+    forecast: &[TimedPoint],
+) -> Option<TimedPoint> {
+    let mut points = history
+        .iter()
+        .chain(forecast.iter())
+        .filter(|point| point.timestamp.is_finite() && point.value.is_finite())
+        .cloned()
+        .collect::<Vec<_>>();
+    points.sort_by(|a, b| {
+        a.timestamp
+            .partial_cmp(&b.timestamp)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    points.dedup_by(|a, b| (a.timestamp - b.timestamp).abs() < 0.001);
+
+    let first = points.first()?.clone();
+    let last = points.last()?.clone();
+    if timestamp <= first.timestamp {
+        return Some(first);
     }
-}
-
-fn series_label(series: &MetricSeries, locale: Locale) -> String {
-    match locale {
-        Locale::Fr => series.label_fr.clone(),
-        Locale::En => series.label_en.clone(),
+    if timestamp >= last.timestamp {
+        return Some(last);
     }
-}
 
-fn metric_order(kind: MetricKind) -> u8 {
-    match kind {
-        MetricKind::Discharge => 0,
-        MetricKind::Temperature => 1,
-        MetricKind::WaterLevel => 2,
+    let upper_index = points
+        .partition_point(|point| point.timestamp < timestamp)
+        .min(points.len() - 1);
+    let lower = &points[upper_index - 1];
+    let upper = &points[upper_index];
+    let span = upper.timestamp - lower.timestamp;
+    if span <= 0.0 {
+        return Some(lower.clone());
     }
+
+    let ratio = ((timestamp - lower.timestamp) / span).clamp(0.0, 1.0);
+    Some(TimedPoint {
+        timestamp,
+        value: lower.value + (upper.value - lower.value) * ratio,
+        label: String::new(),
+    })
 }
 
-fn is_visible_metric(kind: MetricKind) -> bool {
-    !matches!(kind, MetricKind::WaterLevel)
+fn x_coordinate(timestamp: f64, domain: &TimeDomain) -> f64 {
+    position_for_timestamp(timestamp, domain) * SVG_PLOT_WIDTH / 100.0
 }
 
-fn metric_colour(kind: MetricKind) -> &'static str {
-    match kind {
-        MetricKind::Discharge => "#2563eb",
-        MetricKind::WaterLevel => "#0f766e",
-        MetricKind::Temperature => "#b7791f",
-    }
+fn y_coordinate(value: f64, axis: &ValueAxis) -> f64 {
+    value_position(value, axis) * SVG_PLOT_HEIGHT / 100.0
 }
 
-fn discharge_safety_for_value(value: f64, reference_max: Option<f64>) -> DischargeSafety {
-    let reference_max = reference_max
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(600.0);
-    let safe_limit = reference_max / 3.0;
-    let risk_limit = reference_max * 2.0 / 3.0;
+fn value_position(value: f64, axis: &ValueAxis) -> f64 {
+    let span = (axis.max - axis.min).max(0.0001);
+    (100.0 - ((value - axis.min) / span * 100.0)).clamp(0.0, 100.0)
+}
 
-    if value < safe_limit {
+fn position_for_timestamp(timestamp: f64, domain: &TimeDomain) -> f64 {
+    let span = (domain.max - domain.min).max(1.0);
+    ((timestamp - domain.min) / span * 100.0).clamp(0.0, 100.0)
+}
+
+fn discharge_reference_max(station: &StationData) -> f64 {
+    let observed = station
+        .history
+        .iter()
+        .chain(station.forecast.iter())
+        .filter(|series| series.kind == MetricKind::Discharge)
+        .flat_map(|series| series.points.iter().map(|point| point.value))
+        .chain(
+            station
+                .current
+                .iter()
+                .filter(|metric| metric.kind == MetricKind::Discharge)
+                .map(|metric| metric.value),
+        )
+        .reduce(f64::max)
+        .unwrap_or(0.0);
+    let baseline: f64 = if station.id == "2170" { 150.0 } else { 600.0 };
+    observed.max(baseline)
+}
+
+fn discharge_safety(value: f64, reference_max: f64) -> DischargeSafety {
+    if value < reference_max / 3.0 {
         DischargeSafety::Safe
-    } else if value < risk_limit {
+    } else if value < reference_max * 2.0 / 3.0 {
         DischargeSafety::Risky
     } else {
         DischargeSafety::NoSwim
     }
 }
 
-fn discharge_safety_class(safety: DischargeSafety) -> &'static str {
-    match safety {
-        DischargeSafety::Safe => "safety-safe",
-        DischargeSafety::Risky => "safety-risky",
-        DischargeSafety::NoSwim => "safety-noswim",
-    }
+fn discharge_risk_axis_segments(axis: &ValueAxis, reference_max: f64) -> Vec<RiskAxisSegment> {
+    let safe_limit = reference_max / 3.0;
+    let risky_limit = reference_max * 2.0 / 3.0;
+    [
+        (DischargeSafety::Safe, axis.min, safe_limit),
+        (DischargeSafety::Risky, safe_limit, risky_limit),
+        (DischargeSafety::NoSwim, risky_limit, axis.max),
+    ]
+    .into_iter()
+    .filter_map(|(safety, lower, upper)| risk_axis_segment(axis, safety, lower, upper))
+    .collect()
 }
 
-fn discharge_safety_label(safety: DischargeSafety, locale: Locale) -> &'static str {
-    match (locale, safety) {
-        (Locale::Fr, DischargeSafety::Safe) => "Courant lent",
-        (Locale::Fr, DischargeSafety::Risky) => "Attention courant fort",
-        (Locale::Fr, DischargeSafety::NoSwim) => "Danger! Courant très fort!",
-        (Locale::En, DischargeSafety::Safe) => "Slow current",
-        (Locale::En, DischargeSafety::Risky) => "Strong current",
-        (Locale::En, DischargeSafety::NoSwim) => "Danger! Very strong current!",
+fn risk_axis_segment(
+    axis: &ValueAxis,
+    safety: DischargeSafety,
+    lower: f64,
+    upper: f64,
+) -> Option<RiskAxisSegment> {
+    let lower = lower.clamp(axis.min, axis.max);
+    let upper = upper.clamp(axis.min, axis.max);
+    if upper <= lower {
+        return None;
     }
-}
 
-fn axis_tick_class(kind: AxisTickKind) -> &'static str {
-    match kind {
-        AxisTickKind::Day => "axis-tick-mark day",
-        AxisTickKind::Noon => "axis-tick-mark noon",
-        AxisTickKind::Hour => "axis-tick-mark hour",
-    }
-}
-
-fn axis_label_class(tick: &AxisTick) -> &'static str {
-    match (tick.kind, tick.position < 4.0, tick.position > 96.0) {
-        (AxisTickKind::Day, true, _) => "axis-label day start",
-        (AxisTickKind::Noon, true, _) => "axis-label noon start",
-        (AxisTickKind::Hour, true, _) => "axis-label hour start",
-        (AxisTickKind::Day, _, true) => "axis-label day end",
-        (AxisTickKind::Noon, _, true) => "axis-label noon end",
-        (AxisTickKind::Hour, _, true) => "axis-label hour end",
-        (AxisTickKind::Day, _, _) => "axis-label day",
-        (AxisTickKind::Noon, _, _) => "axis-label noon",
-        (AxisTickKind::Hour, _, _) => "axis-label hour",
-    }
-}
-
-fn axis_hover_marker(
-    x_range: Option<(f64, f64)>,
-    hover_x: ReadSignal<Option<f64>>,
-) -> Option<impl IntoView> {
-    let (start, end) = x_range?;
-    let x = hover_x.get()?;
-    let ratio = if end > start {
-        ((x - start) / (end - start)).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    Some(view! {
-        <span
-            class="axis-hover-tick"
-            style=format!("left: {:.6}%;", ratio * 100.0)
-        ></span>
+    let top = value_position(upper, axis);
+    let bottom = value_position(lower, axis);
+    Some(RiskAxisSegment {
+        class_name: safety_class(safety),
+        top,
+        height: (bottom - top).max(0.0),
     })
 }
 
-fn metric_axis_title(kind: MetricKind, unit: &str, locale: Locale) -> String {
-    let label = match (locale, kind) {
-        (Locale::Fr, MetricKind::Discharge) => "Débit",
-        (Locale::Fr, MetricKind::WaterLevel) => "Niveau",
-        (Locale::Fr, MetricKind::Temperature) => "Température",
-        (Locale::En, MetricKind::Discharge) => "Discharge",
-        (Locale::En, MetricKind::WaterLevel) => "Water level",
-        (Locale::En, MetricKind::Temperature) => "Temperature",
-    };
-    format!("{label} ({unit})")
-}
-
-fn chart_points(series: &MetricSeries, forecast: Option<&MetricSeries>) -> Vec<ChartPoint> {
-    let mut points = series
-        .points
-        .iter()
-        .filter_map(|point| {
-            let timestamp = DateTime::parse_from_rfc3339(&point.timestamp).ok()?;
-            Some(ChartPoint {
-                x: timestamp.timestamp() as f64,
-                history_y: point.value,
-                forecast_y: f64::NAN,
-                timestamp: format_swiss_timestamp(timestamp.timestamp()),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    if let Some(forecast) = forecast {
-        points.extend(forecast.points.iter().filter_map(|point| {
-            let timestamp = DateTime::parse_from_rfc3339(&point.timestamp).ok()?;
-            Some(ChartPoint {
-                x: timestamp.timestamp() as f64,
-                history_y: f64::NAN,
-                forecast_y: point.value,
-                timestamp: format_swiss_timestamp(timestamp.timestamp()),
-            })
-        }));
-    }
-
-    points.sort_by(|left, right| {
-        left.x
-            .partial_cmp(&right.x)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    points
-}
-
-fn points_x_range(points: &[ChartPoint]) -> Option<(f64, f64)> {
-    let start = points.first()?.x;
-    let end = points.last()?.x;
-    Some((start, end))
-}
-
-fn points_y_range(
-    points: &[ChartPoint],
-    uncertainty: Option<&MetricUncertainty>,
-) -> Option<(f64, f64)> {
-    let mut values = points.iter().flat_map(|point| {
-        if point.history_y.is_finite() {
-            let mut values = vec![point.history_y];
-            if let Some(uncertainty) = uncertainty {
-                values.push(point.history_y - uncertainty.lower);
-                values.push(point.history_y + uncertainty.upper);
-            }
-            values
-        } else if point.forecast_y.is_finite() {
-            vec![point.forecast_y]
-        } else {
-            Vec::new()
-        }
-    });
-    let first = values.next()?;
-    let (min, max) = values.fold((first, first), |(min, max), value| {
-        (min.min(value), max.max(value))
-    });
-    Some((min, max))
-}
-
-fn metric_value_axis(
+fn value_tick_class(
     kind: MetricKind,
-    points: &[ChartPoint],
-    uncertainty: Option<&MetricUncertainty>,
-    current_value: Option<f64>,
-    axis_floor: Option<f64>,
-    axis_min_ceiling: Option<f64>,
-) -> Option<ValueAxis> {
-    if kind == MetricKind::Temperature {
-        return Some(fixed_temperature_axis());
+    tick: &ValueTick,
+    discharge_reference: Option<f64>,
+) -> String {
+    let Some(reference) = discharge_reference else {
+        return "custom-y-tick".to_string();
+    };
+    if kind != MetricKind::Discharge {
+        return "custom-y-tick".to_string();
     }
-
-    let (mut min, mut max) = points_y_range(points, uncertainty)?;
-    if let Some(value) = current_value.filter(|value| value.is_finite()) {
-        min = min.min(value);
-        max = max.max(value);
-    }
-    if let Some(floor) = axis_floor {
-        min = floor;
-    }
-    if let Some(min_ceiling) = axis_min_ceiling {
-        max = max.max(min_ceiling);
-    }
-
-    Some(value_axis((min, max)))
+    format!(
+        "custom-y-tick {}",
+        safety_class(discharge_safety(tick.value, reference))
+    )
 }
 
-fn fixed_temperature_axis() -> ValueAxis {
-    let min = 5.0;
-    let max = 30.0;
-    let ticks = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0]
-        .into_iter()
-        .map(|value| ValueTick {
-            label: format_value(value),
-            position: y_band_position(value, min, max),
-        })
-        .collect();
-
-    ValueAxis { min, max, ticks }
-}
-
-fn value_axis((min, max): (f64, f64)) -> ValueAxis {
-    let (mut min, mut max) = if min <= max { (min, max) } else { (max, min) };
-
-    if (max - min).abs() < f64::EPSILON {
-        let padding = (max.abs() * 0.05).max(1.0);
-        min -= padding;
-        max += padding;
-    }
-
-    let step = nice_step((max - min) / 4.0);
-    let mut axis_min = (min / step).floor() * step;
-    let mut axis_max = (max / step).ceil() * step;
-
-    if (axis_max - axis_min).abs() < f64::EPSILON {
-        axis_min -= step;
-        axis_max += step;
+fn time_ticks(min: f64, max: f64) -> Vec<AxisTick> {
+    let Some(start_utc) = DateTime::<Utc>::from_timestamp(min as i64, 0) else {
+        return Vec::new();
+    };
+    let start_local = start_utc.with_timezone(&Local);
+    let rounded_hour = (start_local.hour() / 6) * 6;
+    let Some(mut cursor) = local_datetime(start_local.date_naive(), rounded_hour, 0, 0) else {
+        return Vec::new();
+    };
+    while (cursor.timestamp() as f64) < min {
+        cursor += Duration::hours(6);
     }
 
     let mut ticks = Vec::new();
-    let mut value = axis_min;
-    while value <= axis_max + step * 0.5 && ticks.len() < 8 {
-        ticks.push(ValueTick {
-            label: format_value(value),
-            position: y_band_position(value, axis_min, axis_max),
-        });
-        value += step;
-    }
-
-    if ticks.len() < 2 {
-        ticks = vec![
-            ValueTick {
-                label: format_value(axis_min),
-                position: 100.0,
-            },
-            ValueTick {
-                label: format_value(axis_max),
-                position: 0.0,
-            },
-        ];
-    }
-
-    ValueAxis {
-        min: axis_min,
-        max: axis_max,
-        ticks,
-    }
-}
-
-fn nice_step(raw: f64) -> f64 {
-    if !raw.is_finite() || raw <= 0.0 {
-        return 1.0;
-    }
-
-    let exponent = 10_f64.powf(raw.log10().floor());
-    let fraction = raw / exponent;
-    let nice_fraction = if fraction <= 1.0 {
-        1.0
-    } else if fraction <= 2.0 {
-        2.0
-    } else if fraction <= 5.0 {
-        5.0
-    } else {
-        10.0
-    };
-
-    nice_fraction * exponent
-}
-
-fn line_path<F>(
-    points: &[ChartPoint],
-    value_for: F,
-    x_range: Option<(f64, f64)>,
-    y_range: Option<(f64, f64)>,
-) -> Option<String>
-where
-    F: Fn(&ChartPoint) -> f64,
-{
-    let (start_x, end_x) = x_range?;
-    let (min_y, max_y) = y_range?;
-    if end_x <= start_x || max_y <= min_y {
-        return None;
-    }
-
-    let mut path = String::new();
-    let mut drawing = false;
-    let mut drawn_points = 0;
-
-    for point in points {
-        let value = value_for(point);
-        if !value.is_finite() || !(start_x..=end_x).contains(&point.x) {
-            drawing = false;
-            continue;
-        }
-
-        let x = ((point.x - start_x) / (end_x - start_x)).clamp(0.0, 1.0) * SVG_PLOT_WIDTH;
-        let y = y_band_position(value, min_y, max_y);
-        if drawing {
-            path.push_str(&format!(" L {:.3} {:.3}", x, y));
+    while cursor.timestamp() as f64 <= max + 1.0 {
+        let timestamp = cursor.timestamp() as f64;
+        let hour = cursor.hour();
+        let kind = if hour == 0 {
+            AxisTickKind::Day
+        } else if hour == 12 {
+            AxisTickKind::Noon
         } else {
-            if !path.is_empty() {
-                path.push(' ');
-            }
-            path.push_str(&format!("M {:.3} {:.3}", x, y));
-            drawing = true;
-        }
-        drawn_points += 1;
+            AxisTickKind::Hour
+        };
+        let label = match kind {
+            AxisTickKind::Day => cursor.format("%d.%m").to_string(),
+            AxisTickKind::Noon => "12".to_string(),
+            AxisTickKind::Hour => format!("{hour:02}"),
+        };
+        ticks.push(AxisTick {
+            label,
+            timestamp,
+            position: ((timestamp - min) / (max - min).max(1.0) * 100.0).clamp(0.0, 100.0),
+            kind,
+        });
+        cursor += Duration::hours(6);
     }
 
-    (drawn_points >= 2).then_some(path)
+    ticks
 }
 
-fn area_path<F>(
-    points: &[ChartPoint],
-    value_for: F,
-    x_range: Option<(f64, f64)>,
-    y_range: Option<(f64, f64)>,
-) -> Option<String>
-where
-    F: Fn(&ChartPoint) -> f64,
-{
-    let (start_x, end_x) = x_range?;
-    let (min_y, max_y) = y_range?;
-    if end_x <= start_x || max_y <= min_y {
-        return None;
-    }
-
-    let mut path = String::new();
-    let mut drawn_points = 0;
-    let mut run = Vec::<(f64, f64)>::new();
-
-    for point in points {
-        let value = value_for(point);
-        if !value.is_finite() || !(start_x..=end_x).contains(&point.x) {
-            append_area_run(&mut path, &mut run);
-            continue;
-        }
-
-        let x = ((point.x - start_x) / (end_x - start_x)).clamp(0.0, 1.0) * SVG_PLOT_WIDTH;
-        let y = y_band_position(value, min_y, max_y);
-        run.push((x, y));
-        drawn_points += 1;
-    }
-
-    append_area_run(&mut path, &mut run);
-
-    (drawn_points >= 2 && !path.is_empty()).then_some(path)
-}
-
-fn append_area_run(path: &mut String, run: &mut Vec<(f64, f64)>) {
-    if run.len() < 2 {
-        run.clear();
-        return;
-    }
-
-    if !path.is_empty() {
-        path.push(' ');
-    }
-
-    let (first_x, first_y) = run[0];
-    path.push_str(&format!(
-        "M {:.3} {:.3} L {:.3} {:.3}",
-        first_x, SVG_PLOT_HEIGHT, first_x, first_y
-    ));
-    for (x, y) in run.iter().skip(1) {
-        path.push_str(&format!(" L {:.3} {:.3}", x, y));
-    }
-    let last_x = run.last().map(|(x, _)| *x).unwrap_or(first_x);
-    path.push_str(&format!(
-        " L {:.3} {:.3} L {:.3} {:.3} Z",
-        last_x, SVG_PLOT_HEIGHT, first_x, SVG_PLOT_HEIGHT
-    ));
-    run.clear();
-}
-
-fn segmented_line_paths<F>(
-    points: &[ChartPoint],
-    value_for: F,
-    x_range: Option<(f64, f64)>,
-    y_range: Option<(f64, f64)>,
-    risk_reference_max: Option<f64>,
-) -> Vec<SegmentedPath>
-where
-    F: Fn(&ChartPoint) -> f64,
-{
-    let Some((start_x, end_x)) = x_range else {
+fn sun_bands(min: f64, max: f64) -> Vec<SunBand> {
+    let Some(start) = DateTime::<Utc>::from_timestamp(min as i64, 0) else {
         return Vec::new();
     };
-    let Some((min_y, max_y)) = y_range else {
+    let Some(end) = DateTime::<Utc>::from_timestamp(max as i64, 0) else {
         return Vec::new();
     };
-    if end_x <= start_x || max_y <= min_y {
-        return Vec::new();
-    }
-
-    let mut segments = Vec::new();
-    let mut previous = None::<(f64, f64, f64)>;
-
-    for point in points {
-        let value = value_for(point);
-        if !value.is_finite() || !(start_x..=end_x).contains(&point.x) {
-            previous = None;
-            continue;
-        }
-
-        let x = ((point.x - start_x) / (end_x - start_x)).clamp(0.0, 1.0) * SVG_PLOT_WIDTH;
-        let y = y_band_position(value, min_y, max_y);
-        if let Some((previous_x, previous_y, previous_value)) = previous {
-            let safety =
-                discharge_safety_for_value((previous_value + value) / 2.0, risk_reference_max);
-            segments.push(SegmentedPath {
-                path: format!("M {:.3} {:.3} L {:.3} {:.3}", previous_x, previous_y, x, y),
-                safety,
-            });
-        }
-        previous = Some((x, y, value));
-    }
-
-    segments
-}
-
-fn segmented_area_paths<F>(
-    points: &[ChartPoint],
-    value_for: F,
-    x_range: Option<(f64, f64)>,
-    y_range: Option<(f64, f64)>,
-    risk_reference_max: Option<f64>,
-) -> Vec<SegmentedPath>
-where
-    F: Fn(&ChartPoint) -> f64,
-{
-    let Some((start_x, end_x)) = x_range else {
-        return Vec::new();
-    };
-    let Some((min_y, max_y)) = y_range else {
-        return Vec::new();
-    };
-    if end_x <= start_x || max_y <= min_y {
-        return Vec::new();
-    }
-
-    let mut segments = Vec::new();
-    let mut previous = None::<(f64, f64, f64)>;
-
-    for point in points {
-        let value = value_for(point);
-        if !value.is_finite() || !(start_x..=end_x).contains(&point.x) {
-            previous = None;
-            continue;
-        }
-
-        let x = ((point.x - start_x) / (end_x - start_x)).clamp(0.0, 1.0) * SVG_PLOT_WIDTH;
-        let y = y_band_position(value, min_y, max_y);
-        if let Some((previous_x, previous_y, previous_value)) = previous {
-            let safety =
-                discharge_safety_for_value((previous_value + value) / 2.0, risk_reference_max);
-            segments.push(SegmentedPath {
-                path: format!(
-                    "M {:.3} {:.3} L {:.3} {:.3} L {:.3} {:.3} L {:.3} {:.3} Z",
-                    previous_x, SVG_PLOT_HEIGHT, previous_x, previous_y, x, y, x, SVG_PLOT_HEIGHT
-                ),
-                safety,
-            });
-        }
-        previous = Some((x, y, value));
-    }
-
-    segments
-}
-
-fn sun_bands((start_x, end_x): (f64, f64)) -> Vec<SunBand> {
-    if end_x <= start_x {
-        return Vec::new();
-    }
-
-    let Some(start_datetime) = DateTime::<Utc>::from_timestamp(start_x.floor() as i64, 0) else {
-        return Vec::new();
-    };
-    let Some(end_datetime) = DateTime::<Utc>::from_timestamp(end_x.ceil() as i64, 0) else {
-        return Vec::new();
-    };
-    let Some(mut date) = start_datetime
-        .date_naive()
-        .checked_sub_signed(Duration::days(1))
-    else {
-        return Vec::new();
-    };
-    let Some(last_date) = end_datetime
-        .date_naive()
-        .checked_add_signed(Duration::days(1))
-    else {
-        return Vec::new();
-    };
-
+    let mut date = start.with_timezone(&Local).date_naive() - Duration::days(1);
+    let end_date = end.with_timezone(&Local).date_naive() + Duration::days(1);
     let mut bands = Vec::new();
-    while date <= last_date {
-        let Some(sunset) = solar_event_timestamp(date, false) else {
-            date = match date.checked_add_signed(Duration::days(1)) {
-                Some(next) => next,
-                None => break,
-            };
-            continue;
-        };
-        let Some(next_date) = date.checked_add_signed(Duration::days(1)) else {
-            break;
-        };
-        let Some(sunrise) = solar_event_timestamp(next_date, true) else {
-            date = next_date;
-            continue;
-        };
 
-        let band_start = sunset.max(start_x);
-        let band_end = sunrise.min(end_x);
-        if band_end > band_start {
-            let x = ((band_start - start_x) / (end_x - start_x)).clamp(0.0, 1.0) * SVG_PLOT_WIDTH;
-            let width =
-                ((band_end - band_start) / (end_x - start_x)).clamp(0.0, 1.0) * SVG_PLOT_WIDTH;
-            bands.push(SunBand { x, width });
+    while date <= end_date {
+        if let (Some((_, sunset)), Some((next_sunrise, _))) = (
+            sunrise_sunset(date),
+            sunrise_sunset(date + Duration::days(1)),
+        ) {
+            let band_start = sunset.timestamp() as f64;
+            let band_end = next_sunrise.timestamp() as f64;
+            let clipped_start = band_start.max(min);
+            let clipped_end = band_end.min(max);
+            if clipped_end > clipped_start {
+                bands.push(SunBand {
+                    x: ((clipped_start - min) / (max - min).max(1.0) * 100.0).clamp(0.0, 100.0),
+                    width: ((clipped_end - clipped_start) / (max - min).max(1.0) * 100.0)
+                        .clamp(0.0, 100.0),
+                });
+            }
         }
-
-        date = next_date;
+        date += Duration::days(1);
     }
 
     bands
 }
 
-fn solar_event_timestamp(date: NaiveDate, sunrise: bool) -> Option<f64> {
-    let day = date.ordinal() as f64;
-    let longitude_hour = GENEVA_LONGITUDE / 15.0;
-    let approximate_time = if sunrise {
-        day + ((6.0 - longitude_hour) / 24.0)
-    } else {
-        day + ((18.0 - longitude_hour) / 24.0)
-    };
+fn sunrise_sunset(date: NaiveDate) -> Option<(DateTime<Local>, DateTime<Local>)> {
+    let sunrise = solar_event_utc_hour(date, true)?;
+    let sunset = solar_event_utc_hour(date, false)?;
+    Some((
+        utc_hour_to_local(date, sunrise)?,
+        utc_hour_to_local(date, sunset)?,
+    ))
+}
 
-    let mean_anomaly = 0.9856 * approximate_time - 3.289;
+fn solar_event_utc_hour(date: NaiveDate, sunrise: bool) -> Option<f64> {
+    let day = date.ordinal() as f64;
+    let lng_hour = GENEVA_LONGITUDE / 15.0;
+    let base_time = if sunrise { 6.0 } else { 18.0 };
+    let t = day + ((base_time - lng_hour) / 24.0);
+    let mean_anomaly = (0.9856 * t) - 3.289;
     let true_longitude = normalize_degrees(
         mean_anomaly
-            + 1.916 * mean_anomaly.to_radians().sin()
-            + 0.020 * (2.0 * mean_anomaly).to_radians().sin()
+            + (1.916 * deg_sin(mean_anomaly))
+            + (0.020 * deg_sin(2.0 * mean_anomaly))
             + 282.634,
     );
-
-    let mut right_ascension = (0.91764 * true_longitude.to_radians().tan())
-        .atan()
-        .to_degrees();
-    right_ascension = normalize_degrees(right_ascension);
-    let longitude_quadrant = (true_longitude / 90.0).floor() * 90.0;
-    let ascension_quadrant = (right_ascension / 90.0).floor() * 90.0;
-    right_ascension = (right_ascension + longitude_quadrant - ascension_quadrant) / 15.0;
-
-    let sin_declination = 0.39782 * true_longitude.to_radians().sin();
-    let cos_declination = sin_declination.asin().cos();
-    let latitude = GENEVA_LATITUDE.to_radians();
-    let cos_hour_angle = (SUNRISE_SUNSET_ZENITH_DEGREES.to_radians().cos()
-        - sin_declination * latitude.sin())
-        / (cos_declination * latitude.cos());
-
+    let mut right_ascension =
+        normalize_degrees((0.91764 * deg_tan(true_longitude)).atan().to_degrees());
+    let l_quadrant = (true_longitude / 90.0).floor() * 90.0;
+    let ra_quadrant = (right_ascension / 90.0).floor() * 90.0;
+    right_ascension = (right_ascension + l_quadrant - ra_quadrant) / 15.0;
+    let sin_declination = 0.39782 * deg_sin(true_longitude);
+    let cos_declination = (1.0 - sin_declination * sin_declination).sqrt();
+    let cos_hour_angle = (deg_cos(SUNRISE_SUNSET_ZENITH_DEGREES)
+        - (sin_declination * deg_sin(GENEVA_LATITUDE)))
+        / (cos_declination * deg_cos(GENEVA_LATITUDE));
     if !(-1.0..=1.0).contains(&cos_hour_angle) {
         return None;
     }
-
     let hour_angle = if sunrise {
         360.0 - cos_hour_angle.acos().to_degrees()
     } else {
         cos_hour_angle.acos().to_degrees()
     } / 15.0;
+    let local_mean_time = hour_angle + right_ascension - (0.06571 * t) - 6.622;
+    Some(normalize_hours(local_mean_time - lng_hour))
+}
 
-    let local_mean_time = hour_angle + right_ascension - 0.06571 * approximate_time - 6.622;
-    let utc_hour = normalize_hours(local_mean_time - longitude_hour);
-    let seconds = (utc_hour * 3600.0).round() as i64;
-    let midnight = date.and_hms_opt(0, 0, 0)?;
-    Some(
-        DateTime::<Utc>::from_naive_utc_and_offset(midnight, Utc).timestamp() as f64
-            + seconds as f64,
-    )
+fn utc_hour_to_local(date: NaiveDate, hour: f64) -> Option<DateTime<Local>> {
+    let seconds = (hour * 3600.0).round() as i64;
+    let midnight = Utc
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+        .single()?;
+    Some((midnight + Duration::seconds(seconds)).with_timezone(&Local))
+}
+
+fn local_datetime(date: NaiveDate, hour: u32, minute: u32, second: u32) -> Option<DateTime<Local>> {
+    let naive = date.and_hms_opt(hour, minute, second)?;
+    Local
+        .from_local_datetime(&naive)
+        .single()
+        .or_else(|| Local.from_local_datetime(&naive).earliest())
+}
+
+fn deg_sin(value: f64) -> f64 {
+    value.to_radians().sin()
+}
+
+fn deg_cos(value: f64) -> f64 {
+    value.to_radians().cos()
+}
+
+fn deg_tan(value: f64) -> f64 {
+    value.to_radians().tan()
 }
 
 fn normalize_degrees(value: f64) -> f64 {
@@ -1735,132 +1473,59 @@ fn normalize_hours(value: f64) -> f64 {
     value.rem_euclid(24.0)
 }
 
-fn error_band_path(
-    series: &MetricSeries,
-    x_range: Option<(f64, f64)>,
-    y_range: Option<(f64, f64)>,
-) -> Option<String> {
-    let uncertainty = series.uncertainty.as_ref()?;
-    let (start_x, end_x) = x_range?;
-    let (min_y, max_y) = y_range?;
-    if end_x <= start_x || max_y <= min_y {
-        return None;
-    }
+fn mouse_ratio(event: &MouseEvent) -> Option<f64> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use dioxus::web::WebEventExt;
 
-    let mut points = series
-        .points
-        .iter()
-        .filter_map(|point| {
-            let timestamp = DateTime::parse_from_rfc3339(&point.timestamp).ok()?;
-            let x = timestamp.timestamp() as f64;
-            if !(start_x..=end_x).contains(&x) || !point.value.is_finite() {
-                return None;
-            }
-
-            let x_ratio = ((x - start_x) / (end_x - start_x)).clamp(0.0, 1.0) * 1000.0;
-            let upper = y_band_position(point.value + uncertainty.upper, min_y, max_y);
-            let lower = y_band_position(point.value - uncertainty.lower, min_y, max_y);
-            Some((x_ratio, upper, lower))
-        })
-        .collect::<Vec<_>>();
-
-    points.sort_by(|left, right| {
-        left.0
-            .partial_cmp(&right.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    if points.len() < 2 {
-        return None;
-    }
-
-    let mut path = String::new();
-    for (index, (x, upper, _)) in points.iter().enumerate() {
-        if index == 0 {
-            path.push_str(&format!("M {:.3} {:.3}", x, upper));
-        } else {
-            path.push_str(&format!(" L {:.3} {:.3}", x, upper));
+        let web_event = event.data().as_web_event();
+        let target = web_event
+            .target()
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())?;
+        let capture = target
+            .closest(".hover-capture")
+            .ok()
+            .flatten()
+            .unwrap_or(target);
+        let rect = capture.get_bounding_client_rect();
+        if rect.width() <= 0.0 {
+            return None;
         }
+        let client_x = web_event.client_x() as f64;
+        Some(((client_x - rect.left()) / rect.width()).clamp(0.0, 1.0))
     }
-    for (x, _, lower) in points.iter().rev() {
-        path.push_str(&format!(" L {:.3} {:.3}", x, lower));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let point = event.data().element_coordinates();
+        Some((point.x / SVG_PLOT_WIDTH).clamp(0.0, 1.0))
     }
-    path.push_str(" Z");
-    Some(path)
 }
 
-fn y_band_position(value: f64, min_y: f64, max_y: f64) -> f64 {
-    ((max_y - value) / (max_y - min_y)).clamp(0.0, 1.0) * SVG_PLOT_HEIGHT
-}
+#[cfg(target_arch = "wasm32")]
+fn sync_chart_scroll(event: ScrollEvent) {
+    use dioxus::web::WebEventExt;
 
-fn nearest_hover_metric(
-    points: &[ChartPoint],
-    x: f64,
-    unit: &str,
-    x_range: (f64, f64),
-    y_range: (f64, f64),
-) -> Option<HoverMetric> {
-    let (start_x, end_x) = x_range;
-    let (min_y, max_y) = y_range;
-    points
-        .iter()
-        .filter_map(|point| {
-            let value = if point.history_y.is_finite() {
-                point.history_y
-            } else if point.forecast_y.is_finite() {
-                point.forecast_y
-            } else {
-                return None;
-            };
-            let x_ratio = if end_x > start_x {
-                ((point.x - start_x) / (end_x - start_x)).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let y_ratio = if max_y > min_y {
-                ((max_y - value) / (max_y - min_y)).clamp(0.0, 1.0)
-            } else {
-                0.5
-            };
-            Some((
-                (point.x - x).abs(),
-                HoverMetric {
-                    value,
-                    unit: unit.to_string(),
-                    timestamp: point.timestamp.clone(),
-                    cursor_ratio: x_ratio,
-                    point_ratio: y_ratio,
-                },
-            ))
-        })
-        .min_by(|left, right| {
-            left.0
-                .partial_cmp(&right.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(_, metric)| metric)
-}
-
-fn sync_chart_scroll(event: web_sys::Event) {
-    let Some(source) = event
+    let web_event = event.data().as_web_event();
+    let Some(source) = web_event
         .current_target()
-        .and_then(|target| target.dyn_into::<web_sys::HtmlElement>().ok())
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
     else {
         return;
     };
     let scroll_left = source.scroll_left();
-    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+    let Ok(Some(stack)) = source.closest(".chart-stack") else {
         return;
     };
-    let Ok(nodes) = document.query_selector_all(".chart-scroll-sync") else {
+    let Ok(nodes) = stack.query_selector_all(".scroll-sync") else {
         return;
     };
 
     for index in 0..nodes.length() {
-        let Some(element) = nodes
-            .item(index)
-            .and_then(|node| node.dyn_into::<web_sys::HtmlElement>().ok())
-        else {
+        let Some(node) = nodes.item(index) else {
+            continue;
+        };
+        let Ok(element) = node.dyn_into::<web_sys::Element>() else {
             continue;
         };
         if element.scroll_left() != scroll_left {
@@ -1869,190 +1534,574 @@ fn sync_chart_scroll(event: web_sys::Event) {
     }
 }
 
-fn default_visible_x_range(history: &[MetricSeries], full_range: (f64, f64)) -> (f64, f64) {
-    let (start, end) = full_range;
-    let latest_history = history
-        .iter()
-        .flat_map(|series| series.points.iter())
-        .filter_map(|point| DateTime::parse_from_rfc3339(&point.timestamp).ok())
-        .map(|timestamp| timestamp.timestamp() as f64)
-        .fold(None, |latest: Option<f64>, timestamp| {
-            Some(latest.map_or(timestamp, |latest| latest.max(timestamp)))
-        });
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_chart_scroll(_event: ScrollEvent) {}
 
-    let visible_end = latest_history
-        .map(|timestamp| (timestamp + FORECAST_VISIBLE_SECONDS).min(end))
-        .unwrap_or(end)
-        .max(start);
+async fn load_dashboard(token: Option<String>) -> Result<DashboardData, String> {
+    let url = api_url("/api/v1/dashboard");
 
-    if visible_end <= start {
-        (start, end)
-    } else {
-        (start, visible_end)
-    }
-}
-
-fn scroll_content_width(
-    full_range: Option<(f64, f64)>,
-    visible_range: Option<(f64, f64)>,
-) -> String {
-    let Some((full_start, full_end)) = full_range else {
-        return "100%".to_string();
-    };
-    let Some((visible_start, visible_end)) = visible_range else {
-        return "100%".to_string();
-    };
-    let full_span = full_end - full_start;
-    let visible_span = visible_end - visible_start;
-    if full_span <= 0.0 || visible_span <= 0.0 {
-        return "100%".to_string();
-    }
-
-    let percent = (full_span / visible_span * 100.0).clamp(100.0, 320.0);
-    format!("{percent:.3}%")
-}
-
-fn station_time_axis(
-    history: &[MetricSeries],
-    forecast: &[MetricSeries],
-) -> Option<(f64, f64, Vec<AxisTick>)> {
-    let mut times = history
-        .iter()
-        .chain(forecast.iter())
-        .flat_map(|series| series.points.iter())
-        .filter_map(|point| DateTime::parse_from_rfc3339(&point.timestamp).ok())
-        .collect::<Vec<_>>();
-    times.sort();
-    let start = times.first()?;
-    let end = times.last()?;
-    let start_timestamp = start.timestamp();
-    let end_timestamp = end.timestamp();
-    let span = end_timestamp - start_timestamp;
-    if span <= 0 {
-        return None;
-    }
-    let start_offset_seconds = swiss_offset_seconds(start_timestamp);
-    let step_seconds = 6 * 60 * 60;
-    let start_local = start_timestamp + start_offset_seconds;
-    let end_local = end_timestamp + swiss_offset_seconds(end_timestamp);
-    let mut tick_local = start_local - start_local.rem_euclid(step_seconds);
-    if tick_local < start_local {
-        tick_local += step_seconds;
-    }
-    let dense_labels = span <= 3 * 24 * 60 * 60;
-    let mut ticks = Vec::new();
-
-    while tick_local <= end_local {
-        let timestamp = swiss_local_to_utc_timestamp(tick_local);
-        let local_datetime = DateTime::<Utc>::from_timestamp(tick_local, 0)?;
-        let hour = local_datetime.hour();
-        let kind = if hour == 0 {
-            AxisTickKind::Day
-        } else if hour == 12 {
-            AxisTickKind::Noon
-        } else {
-            AxisTickKind::Hour
-        };
-        let label = match hour {
-            0 => local_datetime.format("%d.%m").to_string(),
-            12 => local_datetime.format("%H").to_string(),
-            6 | 18 if dense_labels => local_datetime.format("%H").to_string(),
-            _ => String::new(),
-        };
-        let position = ((timestamp - start_timestamp) as f64 / span as f64).clamp(0.0, 1.0) * 100.0;
-        ticks.push(AxisTick {
-            label,
-            position,
-            kind,
-        });
-        tick_local += step_seconds;
-    }
-
-    Some((start_timestamp as f64, end_timestamp as f64, ticks))
-}
-
-fn format_value(value: f64) -> String {
-    let absolute = value.abs();
-    if absolute >= 100.0 {
-        format!("{value:.0}")
-    } else if absolute >= 10.0 {
-        format!("{value:.1}")
-    } else {
-        format!("{value:.2}")
-    }
-}
-
-fn format_datetime(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|datetime| format_swiss_timestamp(datetime.timestamp()))
-        .unwrap_or_else(|_| value.to_string())
-}
-
-fn format_swiss_timestamp(timestamp: i64) -> String {
-    DateTime::<Utc>::from_timestamp(timestamp + swiss_offset_seconds(timestamp), 0)
-        .map(|datetime| datetime.format("%d.%m %H:%M").to_string())
-        .unwrap_or_else(|| timestamp.to_string())
-}
-
-fn format_swiss_now_seconds() -> String {
-    let timestamp = (js_sys::Date::new_0().get_time() / 1_000.0).floor() as i64;
-    format_swiss_timestamp_seconds(timestamp)
-}
-
-fn format_swiss_timestamp_seconds(timestamp: i64) -> String {
-    DateTime::<Utc>::from_timestamp(timestamp + swiss_offset_seconds(timestamp), 0)
-        .map(|datetime| datetime.format("%d.%m %H:%M:%S").to_string())
-        .unwrap_or_else(|| timestamp.to_string())
-}
-
-fn swiss_local_to_utc_timestamp(local_timestamp: i64) -> i64 {
-    let mut timestamp = local_timestamp - swiss_offset_seconds(local_timestamp);
-
-    for _ in 0..4 {
-        let next = local_timestamp - swiss_offset_seconds(timestamp);
-        if next == timestamp {
-            break;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut request = Request::get(&url);
+        if let Some(token) = token {
+            request = request.header("Authorization", &format!("Bearer {token}"));
         }
-        timestamp = next;
+        let response = request.send().await.map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(response
+                .text()
+                .await
+                .unwrap_or_else(|_| "dashboard request failed".to_string()));
+        }
+        let content_type = response.headers().get("content-type").unwrap_or_default();
+        if !is_json_content_type(&content_type) {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "dashboard API returned non-JSON response ({status}, {}): {}",
+                content_type_label(&content_type),
+                response_excerpt(&body)
+            ));
+        }
+        response.json().await.map_err(|err| err.to_string())
     }
 
-    timestamp
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let client = reqwest::Client::new();
+        let mut request = client.get(url);
+        if let Some(token) = token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(response
+                .text()
+                .await
+                .unwrap_or_else(|_| "dashboard request failed".to_string()));
+        }
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if !is_json_content_type(&content_type) {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "dashboard API returned non-JSON response ({status}, {}): {}",
+                content_type_label(&content_type),
+                response_excerpt(&body)
+            ));
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
 }
 
-fn swiss_offset_seconds(timestamp: i64) -> i64 {
-    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp, 0) else {
-        return 60 * 60;
-    };
-    let year = datetime.year();
-    let Some(summer_start) = swiss_summer_time_transition(year, 3) else {
-        return 60 * 60;
-    };
-    let Some(summer_end) = swiss_summer_time_transition(year, 10) else {
-        return 60 * 60;
-    };
+fn is_json_content_type(content_type: &str) -> bool {
+    let content_type = content_type.to_ascii_lowercase();
+    content_type.starts_with("application/json") || content_type.contains("+json")
+}
 
-    if timestamp >= summer_start && timestamp < summer_end {
-        2 * 60 * 60
+fn content_type_label(content_type: &str) -> String {
+    if content_type.trim().is_empty() {
+        "missing content-type".to_string()
     } else {
-        60 * 60
+        content_type.to_string()
     }
 }
 
-fn swiss_summer_time_transition(year: i32, month: u32) -> Option<i64> {
-    let last_day = NaiveDate::from_ymd_opt(year, month, 31)?;
-    let last_sunday = last_day.checked_sub_signed(Duration::days(i64::from(
-        last_day.weekday().num_days_from_sunday(),
-    )))?;
-
-    Some(
-        DateTime::<Utc>::from_naive_utc_and_offset(last_sunday.and_hms_opt(1, 0, 0)?, Utc)
-            .timestamp(),
-    )
+fn response_excerpt(body: &str) -> String {
+    let compact = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut excerpt = compact.chars().take(180).collect::<String>();
+    if compact.chars().count() > excerpt.chars().count() {
+        excerpt.push_str("...");
+    }
+    excerpt
 }
 
-fn tr(locale: Locale, fr: &'static str, en: &'static str) -> &'static str {
+async fn authenticate_pro(code: String) -> Result<ProAuthResponse, String> {
+    let url = api_url("/api/v1/auth/pro");
+    let request = ProAuthRequest { code };
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let response = Request::post(&url)
+            .json(&request)
+            .map_err(|err| err.to_string())?
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(response
+                .text()
+                .await
+                .unwrap_or_else(|_| "invalid pro code".to_string()));
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let response = reqwest::Client::new()
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(response
+                .text()
+                .await
+                .unwrap_or_else(|_| "invalid pro code".to_string()));
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+}
+
+fn api_url(path: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        path.to_string()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let base = option_env!("RHONOMETRE_API_BASE").unwrap_or("http://127.0.0.1:3000");
+        format!("{}{}", base.trim_end_matches('/'), path)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn register_service_worker() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if can_register_service_worker(&window) {
+        let _ = window.navigator().service_worker().register("/sw.js");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn can_register_service_worker(window: &web_sys::Window) -> bool {
+    if window.is_secure_context() {
+        return true;
+    }
+
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_default();
+    let hostname = location.hostname().unwrap_or_default();
+    protocol == "https:" || hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
+}
+
+fn read_stored_pro_token() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(PRO_TOKEN_STORAGE_KEY).ok().flatten())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+}
+
+fn store_pro_token(token: Option<&str>) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(storage) =
+        web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+    {
+        match token {
+            Some(token) => {
+                let _ = storage.set_item(PRO_TOKEN_STORAGE_KEY, token);
+            }
+            None => {
+                let _ = storage.remove_item(PRO_TOKEN_STORAGE_KEY);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = token;
+}
+
+fn initial_focus_mode() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item("rhonometre_focus").ok().flatten())
+            .as_deref()
+            == Some("1")
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
+fn store_focus_mode(enabled: bool) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(storage) =
+        web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+    {
+        let _ = storage.set_item("rhonometre_focus", if enabled { "1" } else { "0" });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = enabled;
+}
+
+fn tr<'a>(locale: Locale, fr: &'a str, en: &'a str) -> &'a str {
     match locale {
         Locale::Fr => fr,
         Locale::En => en,
+    }
+}
+
+fn station_title(station: &StationData, locale: Locale) -> String {
+    match locale {
+        Locale::Fr => station.role_fr.clone(),
+        Locale::En => station.role_en.clone(),
+    }
+}
+
+fn station_subtitle(station: &StationData, locale: Locale) -> String {
+    match locale {
+        Locale::Fr => station.name_fr.clone(),
+        Locale::En => station.name_en.clone(),
+    }
+}
+
+fn metric_title(kind: MetricKind, locale: Locale) -> &'static str {
+    match (kind, locale) {
+        (MetricKind::Discharge, Locale::Fr) => "Débit",
+        (MetricKind::Discharge, Locale::En) => "Discharge",
+        (MetricKind::Temperature, Locale::Fr) => "Température",
+        (MetricKind::Temperature, Locale::En) => "Temperature",
+        (MetricKind::WaterLevel, Locale::Fr) => "Niveau",
+        (MetricKind::WaterLevel, Locale::En) => "Water level",
+    }
+}
+
+fn axis_title(kind: MetricKind, locale: Locale, unit: &str) -> String {
+    format!("{} ({unit})", metric_title(kind, locale))
+}
+
+fn default_unit(kind: MetricKind) -> &'static str {
+    match kind {
+        MetricKind::Discharge => "m³/s",
+        MetricKind::WaterLevel => "m",
+        MetricKind::Temperature => "°C",
+    }
+}
+
+fn metric_kind_class(kind: MetricKind) -> &'static str {
+    match kind {
+        MetricKind::Discharge => "discharge",
+        MetricKind::WaterLevel => "level",
+        MetricKind::Temperature => "temperature",
+    }
+}
+
+fn tick_kind_class(kind: AxisTickKind) -> &'static str {
+    match kind {
+        AxisTickKind::Day => "day",
+        AxisTickKind::Noon => "noon",
+        AxisTickKind::Hour => "hour",
+    }
+}
+
+fn axis_label_class(tick: &AxisTick) -> String {
+    let mut class = format!("axis-label {}", tick_kind_class(tick.kind));
+    if tick.position <= 0.5 {
+        class.push_str(" start");
+    } else if tick.position >= 99.5 {
+        class.push_str(" end");
+    }
+    if tick.kind == AxisTickKind::Hour && (tick.position <= 5.5 || tick.position >= 94.5) {
+        class.push_str(" edge-hour");
+    }
+    if tick.kind == AxisTickKind::Noon && (tick.position <= 10.5 || tick.position >= 89.5) {
+        class.push_str(" edge-noon");
+    }
+    class
+}
+
+fn axis_label_full(tick: &AxisTick) -> String {
+    match tick.kind {
+        AxisTickKind::Day | AxisTickKind::Hour => tick.label.clone(),
+        AxisTickKind::Noon => "12:00".to_string(),
+    }
+}
+
+fn axis_label_wide(tick: &AxisTick, locale: Locale) -> String {
+    match tick.kind {
+        AxisTickKind::Day => {
+            let Some(datetime) = DateTime::<Utc>::from_timestamp(tick.timestamp as i64, 0) else {
+                return axis_label_short(tick, locale);
+            };
+            format!(
+                "{} {}",
+                weekday_medium_label(tick.timestamp, locale),
+                datetime.with_timezone(&Local).day()
+            )
+        }
+        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Hour => tick.label.clone(),
+    }
+}
+
+fn axis_label_medium(tick: &AxisTick, locale: Locale) -> String {
+    match tick.kind {
+        AxisTickKind::Day => weekday_medium_label(tick.timestamp, locale).to_string(),
+        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Hour => tick.label.clone(),
+    }
+}
+
+fn axis_label_short(tick: &AxisTick, locale: Locale) -> String {
+    match tick.kind {
+        AxisTickKind::Day => weekday_short_label(tick.timestamp, locale).to_string(),
+        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Hour => tick.label.clone(),
+    }
+}
+
+fn weekday_short_label(timestamp: f64, locale: Locale) -> &'static str {
+    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp as i64, 0) else {
+        return "";
+    };
+    match (locale, datetime.with_timezone(&Local).weekday()) {
+        (Locale::Fr, chrono::Weekday::Mon) => "L",
+        (Locale::Fr, chrono::Weekday::Tue) => "Ma",
+        (Locale::Fr, chrono::Weekday::Wed) => "Me",
+        (Locale::Fr, chrono::Weekday::Thu) => "J",
+        (Locale::Fr, chrono::Weekday::Fri) => "V",
+        (Locale::Fr, chrono::Weekday::Sat) => "S",
+        (Locale::Fr, chrono::Weekday::Sun) => "D",
+        (Locale::En, chrono::Weekday::Mon) => "M",
+        (Locale::En, chrono::Weekday::Tue) => "T",
+        (Locale::En, chrono::Weekday::Wed) => "W",
+        (Locale::En, chrono::Weekday::Thu) => "Th",
+        (Locale::En, chrono::Weekday::Fri) => "F",
+        (Locale::En, chrono::Weekday::Sat) => "Sa",
+        (Locale::En, chrono::Weekday::Sun) => "Su",
+    }
+}
+
+fn weekday_medium_label(timestamp: f64, locale: Locale) -> &'static str {
+    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp as i64, 0) else {
+        return "";
+    };
+    match (locale, datetime.with_timezone(&Local).weekday()) {
+        (Locale::Fr, chrono::Weekday::Mon) => "Lun",
+        (Locale::Fr, chrono::Weekday::Tue) => "Mar",
+        (Locale::Fr, chrono::Weekday::Wed) => "Mer",
+        (Locale::Fr, chrono::Weekday::Thu) => "Jeu",
+        (Locale::Fr, chrono::Weekday::Fri) => "Ven",
+        (Locale::Fr, chrono::Weekday::Sat) => "Sam",
+        (Locale::Fr, chrono::Weekday::Sun) => "Dim",
+        (Locale::En, chrono::Weekday::Mon) => "Mon",
+        (Locale::En, chrono::Weekday::Tue) => "Tue",
+        (Locale::En, chrono::Weekday::Wed) => "Wed",
+        (Locale::En, chrono::Weekday::Thu) => "Thu",
+        (Locale::En, chrono::Weekday::Fri) => "Fri",
+        (Locale::En, chrono::Weekday::Sat) => "Sat",
+        (Locale::En, chrono::Weekday::Sun) => "Sun",
+    }
+}
+
+fn time_axis_range_label(domain: &TimeDomain, locale: Locale) -> String {
+    let Some(start) = DateTime::<Utc>::from_timestamp(domain.min as i64, 0) else {
+        return String::new();
+    };
+    let Some(end) = DateTime::<Utc>::from_timestamp(domain.max as i64, 0) else {
+        return String::new();
+    };
+    let start = start.with_timezone(&Local).date_naive();
+    let end = end.with_timezone(&Local).date_naive();
+
+    if start.year() == end.year() && start.month() == end.month() {
+        match locale {
+            Locale::Fr => format!(
+                "{}-{} {} {}",
+                start.day(),
+                end.day(),
+                month_name_fr(start.month()),
+                start.year()
+            ),
+            Locale::En => format!(
+                "{} {}-{}, {}",
+                month_name_en(start.month()),
+                start.day(),
+                end.day(),
+                start.year()
+            ),
+        }
+    } else if start.year() == end.year() {
+        match locale {
+            Locale::Fr => format!(
+                "{} {}-{} {} {}",
+                start.day(),
+                month_name_fr(start.month()),
+                end.day(),
+                month_name_fr(end.month()),
+                start.year()
+            ),
+            Locale::En => format!(
+                "{} {}-{} {}, {}",
+                month_name_en(start.month()),
+                start.day(),
+                month_name_en(end.month()),
+                end.day(),
+                start.year()
+            ),
+        }
+    } else {
+        match locale {
+            Locale::Fr => format!(
+                "{} {} {}-{} {} {}",
+                start.day(),
+                month_name_fr(start.month()),
+                start.year(),
+                end.day(),
+                month_name_fr(end.month()),
+                end.year()
+            ),
+            Locale::En => format!(
+                "{} {}, {}-{} {}, {}",
+                month_name_en(start.month()),
+                start.day(),
+                start.year(),
+                month_name_en(end.month()),
+                end.day(),
+                end.year()
+            ),
+        }
+    }
+}
+
+fn month_name_fr(month: u32) -> &'static str {
+    match month {
+        1 => "janv.",
+        2 => "févr.",
+        3 => "mars",
+        4 => "avr.",
+        5 => "mai",
+        6 => "juin",
+        7 => "juil.",
+        8 => "août",
+        9 => "sept.",
+        10 => "oct.",
+        11 => "nov.",
+        12 => "déc.",
+        _ => "",
+    }
+}
+
+fn month_name_en(month: u32) -> &'static str {
+    match month {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "",
+    }
+}
+
+fn safety_class(safety: DischargeSafety) -> &'static str {
+    match safety {
+        DischargeSafety::Safe => "safety-safe",
+        DischargeSafety::Risky => "safety-risky",
+        DischargeSafety::NoSwim => "safety-noswim",
+    }
+}
+
+fn safety_label(safety: DischargeSafety, locale: Locale) -> &'static str {
+    match (safety, locale) {
+        (DischargeSafety::Safe, Locale::Fr) => "Courant lent",
+        (DischargeSafety::Safe, Locale::En) => "Slow current",
+        (DischargeSafety::Risky, Locale::Fr) => "Attention courant fort",
+        (DischargeSafety::Risky, Locale::En) => "Strong current",
+        (DischargeSafety::NoSwim, Locale::Fr) => "Danger! Courant très fort!",
+        (DischargeSafety::NoSwim, Locale::En) => "Danger! Very strong current!",
+    }
+}
+
+fn format_metric_value(value: f64, unit: &str, kind: MetricKind) -> String {
+    match kind {
+        MetricKind::Temperature => format!("{value:.1} {unit}"),
+        MetricKind::Discharge => format!("{value:.0} {unit}"),
+        MetricKind::WaterLevel => format!("{value:.2} {unit}"),
+    }
+}
+
+fn format_timestamp(value: &str, locale: Locale) -> String {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| {
+            let local = timestamp.with_timezone(&Local);
+            match locale {
+                Locale::Fr => local.format("%d.%m.%Y %H:%M").to_string(),
+                Locale::En => local.format("%Y-%m-%d %H:%M").to_string(),
+            }
+        })
+        .unwrap_or_else(|_| value.to_string())
+}
+
+fn format_timestamp_from_seconds(seconds: f64, locale: Locale) -> String {
+    DateTime::<Utc>::from_timestamp(seconds as i64, 0)
+        .map(|timestamp| format_timestamp(&timestamp.to_rfc3339(), locale))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn format_swiss_now_seconds() -> String {
+    Local::now().format("%H:%M:%S").to_string()
+}
+
+#[component]
+fn FocusIcon(active: bool) -> Element {
+    if active {
+        rsx! {
+            svg { class: "button-icon", view_box: "0 0 24 24",
+                path { d: "M8 3v3a2 2 0 0 1-2 2H3" }
+                path { d: "M21 8h-3a2 2 0 0 1-2-2V3" }
+                path { d: "M3 16h3a2 2 0 0 1 2 2v3" }
+                path { d: "M16 21v-3a2 2 0 0 1 2-2h3" }
+            }
+        }
+    } else {
+        rsx! {
+            svg { class: "button-icon", view_box: "0 0 24 24",
+                path { d: "M15 3h6v6" }
+                path { d: "M9 21H3v-6" }
+                path { d: "M21 3l-7 7" }
+                path { d: "M3 21l7-7" }
+            }
+        }
+    }
+}
+
+#[component]
+fn RefreshIcon() -> Element {
+    rsx! {
+        svg { class: "button-icon", view_box: "0 0 24 24",
+            path { d: "M21 12a9 9 0 0 1-15.5 6.3" }
+            path { d: "M3 12A9 9 0 0 1 18.5 5.7" }
+            path { d: "M3 18v-6h6" }
+            path { d: "M21 6v6h-6" }
+        }
     }
 }

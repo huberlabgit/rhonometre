@@ -12,7 +12,9 @@
   --red: #b42318;
   --green: #2f7d46;
   --shadow: 0 14px 45px rgba(25, 38, 34, 0.10);
-  --plot-left-inset: 86px;
+  --plot-left-inset: 62px;
+  --plot-right-inset: 62px;
+  --chart-content-min-width: 100%;
   --plot-grid-line: rgba(97, 112, 106, 0.15);
   --plot-cursor-line: rgba(23, 33, 29, 0.52);
   font-family:
@@ -51,14 +53,14 @@ a {
 }
 
 .app-shell {
-  width: min(1180px, calc(100vw - 32px));
+  width: min(1240px, calc(100vw - 20px));
   margin: 0 auto;
-  padding: 24px 0 48px;
+  padding: 16px 0 36px;
 }
 
 .app-shell.focus-mode {
-  width: min(1440px, calc(100vw - 24px));
-  padding: 12px 0 24px;
+  width: min(1480px, calc(100vw - 16px));
+  padding: 8px 0 20px;
 }
 
 .app-shell.focus-mode .topbar {
@@ -87,7 +89,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 16px 0 24px;
+  padding: 10px 0 18px;
 }
 
 .topbar h1,
@@ -99,6 +101,38 @@ a {
 .topbar h1 {
   font-size: clamp(2.1rem, 6vw, 4.25rem);
   line-height: 0.95;
+}
+
+.brand-lockup {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.partner-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.partner-logo-icon {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  display: block;
+  border-radius: 999px;
+  background-color: #17211d;
+  background-image: url("/public/Logo_Pontonniers_Round_White.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 86%;
 }
 
 .eyebrow {
@@ -369,6 +403,22 @@ a {
   line-height: 1.25;
 }
 
+.station-last-measure {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.station-last-measure span {
+  color: var(--ink);
+}
+
 .page-live-clock {
   flex: 0 0 auto;
   color: var(--muted);
@@ -417,9 +467,26 @@ a {
   position: relative;
   z-index: 2;
   display: grid;
-  padding: 12px 16px;
+  padding: 10px 12px;
   overflow: hidden;
   min-width: 0;
+  --metric-axis: var(--muted);
+  --metric-line: var(--teal);
+  --metric-fill: var(--teal);
+  --metric-grid: rgba(97, 112, 106, 0.12);
+}
+
+.chart-card.temperature {
+  --metric-axis: var(--red);
+  --metric-line: #dc2626;
+  --metric-grid: rgba(180, 35, 24, 0.16);
+}
+
+.chart-card.discharge {
+  --metric-axis: var(--blue);
+  --metric-line: #1d4ed8;
+  --metric-fill: #2563eb;
+  --metric-grid: rgba(37, 99, 235, 0.14);
 }
 
 .plot-row {
@@ -453,11 +520,17 @@ a {
   pointer-events: none;
 }
 
+.custom-y-axis-right {
+  right: 0;
+  left: auto;
+  width: var(--plot-right-inset);
+}
+
 .custom-y-axis-title {
   position: absolute;
   top: 50%;
-  right: 40px;
-  color: var(--muted);
+  right: 45px;
+  color: var(--metric-axis);
   font-size: 0.68rem;
   font-weight: 850;
   letter-spacing: 0;
@@ -469,17 +542,84 @@ a {
   writing-mode: vertical-rl;
 }
 
+.custom-y-axis-right .custom-y-axis-title {
+  right: auto;
+  left: 45px;
+}
+
+.risk-axis-scale {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  opacity: 0.94;
+}
+
+.custom-y-axis-right .risk-axis-scale {
+  right: auto;
+  left: 0;
+}
+
+.risk-axis-segment {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.risk-axis-segment.safety-safe {
+  background: #16803c;
+}
+
+.risk-axis-segment.safety-risky {
+  background: #d97706;
+}
+
+.risk-axis-segment.safety-noswim {
+  background: #dc2626;
+}
+
 .custom-y-tick {
   position: absolute;
-  right: 10px;
-  color: var(--muted);
+  right: 4px;
+  width: 32px;
+  color: var(--metric-axis);
   font-size: 0.68rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   opacity: 0.9;
+  text-align: right;
   transform: translateY(-50%);
   white-space: nowrap;
+}
+
+.custom-y-axis.has-risk-scale .custom-y-tick {
+  right: 10px;
+}
+
+.custom-y-tick.safety-safe {
+  color: #16803c;
+}
+
+.custom-y-tick.safety-risky {
+  color: #d97706;
+}
+
+.custom-y-tick.safety-noswim {
+  color: #dc2626;
+}
+
+.custom-y-axis-right .custom-y-tick {
+  right: auto;
+  left: 4px;
+  text-align: left;
+}
+
+.custom-y-axis-right.has-risk-scale .custom-y-tick {
+  left: 7px;
 }
 
 .custom-plot-area {
@@ -490,7 +630,7 @@ a {
 .plot-scroll-viewport {
   position: absolute;
   top: 0;
-  right: 0;
+  right: var(--plot-right-inset);
   bottom: 0;
   left: var(--plot-left-inset);
   overflow-x: auto;
@@ -515,9 +655,16 @@ a {
   overflow: visible;
 }
 
+.hover-capture {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  cursor: crosshair;
+}
+
 .custom-grid-x line,
 .custom-grid-y line {
-  stroke: rgba(97, 112, 106, 0.12);
+  stroke: var(--metric-grid);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
@@ -536,6 +683,11 @@ a {
 .custom-area {
   stroke: none;
   fill-opacity: 0.18;
+}
+
+.custom-area.discharge {
+  fill: var(--metric-fill);
+  fill-opacity: 0.20;
 }
 
 .custom-area.forecast {
@@ -563,9 +715,22 @@ a {
   vector-effect: non-scaling-stroke;
 }
 
+.custom-line.discharge {
+  stroke: var(--metric-line);
+}
+
+.custom-line.temperature {
+  stroke: var(--metric-line);
+  stroke-width: 3.6;
+}
+
 .custom-line.forecast {
   stroke: #b45309;
   stroke-dasharray: 7 5;
+}
+
+.custom-line.forecast.temperature {
+  stroke: var(--metric-line);
 }
 
 .custom-line.safety-safe {
@@ -600,15 +765,11 @@ a {
   position: absolute;
   width: 14px;
   height: 14px;
-  border: 3px solid var(--blue);
+  border: 3px solid var(--metric-line);
   border-radius: 50%;
   background: #ffffff;
   box-shadow: 0 3px 12px rgba(23, 33, 29, 0.24);
   transform: translate(-50%, -50%);
-}
-
-.chart-card.temperature .hover-cursor-point {
-  border-color: var(--amber);
 }
 
 .chart-card.level .hover-cursor-point {
@@ -673,11 +834,10 @@ a {
 }
 
 .discharge-comment {
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 850;
   letter-spacing: 0;
-  line-height: 1;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 .discharge-comment.safety-safe {
@@ -728,8 +888,13 @@ a {
 
 .shared-axis-frame {
   margin-left: var(--plot-left-inset);
+  margin-right: var(--plot-right-inset);
   max-width: 100%;
   min-width: 0;
+}
+
+.axis-range-label {
+  display: none;
 }
 
 .axis-scroll-viewport {
@@ -826,8 +991,12 @@ a {
 }
 
 .axis-label.noon {
-  width: 24px;
+  width: 36px;
   opacity: 0.78;
+}
+
+.axis-label.edge-hour {
+  display: none;
 }
 
 .axis-label.start {
@@ -838,6 +1007,12 @@ a {
 .axis-label.end {
   text-align: right;
   transform: translateX(-100%);
+}
+
+.axis-label-wide,
+.axis-label-medium,
+.axis-label-short {
+  display: none;
 }
 
 .time-axis-middle .axis-label {
@@ -902,6 +1077,91 @@ a {
   }
 }
 
+@media (max-width: 1180px) {
+  .axis-label {
+    width: 44px;
+    font-size: 0.66rem;
+  }
+
+  .axis-range-label {
+    display: block;
+    margin: 0 0 2px;
+    color: var(--muted);
+    font-size: 0.6rem;
+    font-weight: 750;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .axis-label-full {
+    display: none;
+  }
+
+  .axis-label-wide {
+    display: inline;
+  }
+
+  .axis-label.day {
+    width: 44px;
+  }
+
+  .axis-label.hour {
+    display: none;
+    opacity: 0.68;
+  }
+
+  .axis-label.noon {
+    display: block;
+    width: 36px;
+  }
+
+  .axis-label.edge-noon {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .axis-label {
+    width: 28px;
+  }
+
+  .axis-label-wide {
+    display: none;
+  }
+
+  .axis-label-medium {
+    display: inline;
+  }
+
+  .axis-label.day {
+    width: 28px;
+  }
+}
+
+@media (max-width: 540px) {
+  .axis-label {
+    width: 20px;
+  }
+
+  .axis-label-medium {
+    display: none;
+  }
+
+  .axis-label-short {
+    display: inline;
+  }
+
+  .axis-label.day {
+    width: 20px;
+  }
+
+  .axis-label.noon {
+    display: none;
+    width: 20px;
+  }
+}
+
 @media (max-width: 900px) {
   .topbar,
   .station-heading {
@@ -911,6 +1171,10 @@ a {
 
   .topbar-actions {
     justify-content: flex-start;
+  }
+
+  .partner-mark {
+    white-space: normal;
   }
 
   .source-strip,
@@ -942,12 +1206,15 @@ a {
 
 @media (max-width: 640px) {
   :root {
-    --plot-left-inset: 72px;
+    --plot-left-inset: 50px;
+    --plot-right-inset: 50px;
+    --chart-content-min-width: 150px;
   }
 
   .app-shell {
-    width: min(100vw - 20px, 1180px);
-    padding-top: 12px;
+    width: min(100vw - 12px, 1240px);
+    padding-top: 8px;
+    padding-bottom: 20px;
   }
 
   .source-strip,
@@ -963,36 +1230,55 @@ a {
     height: 230px;
   }
 
+  .chart-card {
+    padding: 8px 6px;
+  }
+
   .custom-y-axis-title {
-    right: 34px;
+    right: 35px;
     font-size: 0.62rem;
   }
 
+  .custom-y-axis-right .custom-y-axis-title {
+    right: auto;
+    left: 35px;
+  }
+
+  .risk-axis-scale {
+    width: 4px;
+  }
+
   .custom-y-tick {
-    right: 7px;
+    right: 2px;
+    width: 26px;
     font-size: 0.64rem;
+  }
+
+  .custom-y-axis.has-risk-scale .custom-y-tick {
+    right: 6px;
+  }
+
+  .custom-y-axis-right.has-risk-scale .custom-y-tick {
+    left: 6px;
   }
 
   .plot-current {
     gap: 10px;
   }
 
+}
+
+@media (max-width: 360px) {
   .axis-label {
-    width: 24px;
-    font-size: 0.66rem;
+    width: 16px;
+    font-size: 0.58rem;
   }
 
   .axis-label.day {
-    width: 40px;
+    width: 16px;
   }
 
-  .axis-label.hour {
-    display: none;
-    opacity: 0.68;
-  }
-
-  .axis-label.noon {
-    display: block;
-    width: 22px;
+  .axis-range-label {
+    font-size: 0.56rem;
   }
 }

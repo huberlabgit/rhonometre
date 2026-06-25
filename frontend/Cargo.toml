@@ -3,14 +3,21 @@ name = "nivrhone-frontend"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["web"]
+web = ["dioxus/web", "gloo-net", "gloo-timers", "wasm-bindgen", "wasm-bindgen-futures", "web-sys"]
+desktop = ["dioxus/desktop", "reqwest", "tokio"]
+mobile = ["dioxus/mobile", "reqwest", "tokio"]
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde", "wasmbind"] }
 console_error_panic_hook = "0.1"
-gloo-net = "0.6"
-gloo-timers = { version = "0.3", features = ["futures"] }
-js-sys = "0.3"
-leptos = { version = "0.8", features = ["csr"] }
+dioxus = { version = "0.7.0", default-features = false, features = ["launch", "logger", "lib"] }
+gloo-net = { version = "0.6", optional = true }
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 serde = { version = "1", features = ["derive"] }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "DomRect", "Element", "HtmlElement", "HtmlInputElement", "MouseEvent", "Navigator", "NodeList", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Window"] }
+tokio = { version = "1", features = ["time"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["Document", "DomRect", "Element", "EventTarget", "HtmlInputElement", "Location", "MouseEvent", "Navigator", "NodeList", "ServiceWorkerContainer", "ServiceWorkerRegistration", "Storage", "Window"], optional = true }
