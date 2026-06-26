@@ -9,7 +9,6 @@ use gloo_net::http::Request;
 use gloo_timers::future::TimeoutFuture;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
-
 const REFRESH_MS: u32 = 120_000;
 const SVG_PLOT_WIDTH: f64 = 1000.0;
 const SVG_PLOT_HEIGHT: f64 = 100.0;
@@ -24,7 +23,6 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
-        register_service_worker();
         dioxus::LaunchBuilder::web()
             .with_cfg(dioxus::web::Config::new().rootname("app"))
             .launch(App);
@@ -39,6 +37,10 @@ struct DashboardData {
     generated_at: String,
     cache_status: CacheStatus,
     source: SourceInfo,
+    #[serde(default)]
+    sources: Vec<SourceInfo>,
+    #[serde(default)]
+    air_temperature: Option<AirTemperatureData>,
     stations: Vec<StationData>,
     warnings: Vec<String>,
 }
@@ -57,6 +59,13 @@ struct SourceInfo {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+struct AirTemperatureData {
+    source: SourceInfo,
+    current: Option<CurrentMetric>,
+    history: MetricSeries,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 struct StationData {
     id: String,
     slug: String,
@@ -69,9 +78,19 @@ struct StationData {
     history: Vec<MetricSeries>,
     forecast: Vec<MetricSeries>,
     #[serde(default)]
+    source: StationDataSource,
+    #[serde(default)]
     notice_fr: Option<String>,
     #[serde(default)]
     notice_en: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StationDataSource {
+    #[default]
+    Hydrodaten,
+    Derived,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -150,7 +169,7 @@ enum DischargeSafety {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AxisTickKind {
-    Day,
+    Midnight,
     Noon,
     Hour,
 }
@@ -213,11 +232,19 @@ struct HoverState {
     position: f64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EmbedConfig {
+    station: String,
+}
+
 #[component]
 fn App() -> Element {
-    let mut locale = use_signal(|| Locale::Fr);
-    let selected_station = use_signal(|| "2606".to_string());
-    let mut focus_mode = use_signal(initial_focus_mode);
+    let embed_config = initial_embed_config();
+    let embed_mode = embed_config.is_some();
+    let initial_station = initial_station_id(embed_config.as_ref());
+    let mut locale = use_signal(initial_locale);
+    let selected_station = use_signal(move || initial_station.clone());
+    let mut focus_mode = use_signal(move || !embed_mode && initial_focus_mode());
     #[allow(unused_mut)]
     let mut live_clock = use_signal(format_swiss_now_seconds);
     let mut refresh_version = use_signal(|| 0_u64);
@@ -267,7 +294,9 @@ fn App() -> Element {
 
     let dashboard_result = dashboard.read().clone();
     let pro_enabled = pro_token().is_some();
-    let app_class = if focus_mode() {
+    let app_class = if embed_mode {
+        "app-shell embed-mode"
+    } else if focus_mode() {
         "app-shell focus-mode"
     } else {
         "app-shell"
@@ -277,32 +306,49 @@ fn App() -> Element {
         document::Style { "{APP_CSS}" }
 
         div { class: "{app_class}",
-            button {
-                class: "focus-toggle-button icon-button",
-                r#type: "button",
-                title: if focus_mode() {
-                    tr(locale(), "Quitter le mode focus", "Exit focus mode")
-                } else {
-                    tr(locale(), "Mode focus", "Focus mode")
-                },
-                onclick: move |_| {
-                    let next = !focus_mode();
-                    focus_mode.set(next);
-                    store_focus_mode(next);
-                },
-                FocusIcon { active: focus_mode() }
+            if !embed_mode {
+                button {
+                    class: "focus-toggle-button icon-button",
+                    r#type: "button",
+                    title: if focus_mode() {
+                        tr(locale(), "Quitter le mode focus", "Exit focus mode")
+                    } else {
+                        tr(locale(), "Mode focus", "Focus mode")
+                    },
+                    onclick: move |_| {
+                        let next = !focus_mode();
+                        focus_mode.set(next);
+                        store_focus_mode(next);
+                    },
+                    FocusIcon { active: focus_mode() }
+                }
             }
 
+            if focus_mode() && !embed_mode {
+                span {
+                    class: "focus-corner-logo",
+                    role: "img",
+                    aria_label: "Pontonnier·ère·s de Genève",
+                    ""
+                }
+            }
+
+            if !embed_mode {
                 div { class: "topbar",
                     div { class: "brand-lockup",
-                        h1 { "rhonometre" }
+                        h1 { "{app_title(locale())}" }
                         div { class: "partner-mark",
+                            span { class: "station-brand-copy",
+                                "des"
+                                br {}
+                                "Pontonnier·ère·s"
+                                br {}
+                                "de Genève"
+                            }
                             span { class: "partner-logo-icon", "" }
-                            span { "Pontonniers de Genève" }
                         }
                     }
                     div { class: "topbar-actions",
-                    div { class: "page-live-clock", "{live_clock}" }
                     div { class: "segmented",
                         button {
                             class: if locale() == Locale::Fr { "active" } else { "" },
@@ -335,18 +381,11 @@ fn App() -> Element {
                             "Pro"
                         }
                     }
-                    button {
-                        class: "refresh-button icon-button",
-                        r#type: "button",
-                        title: tr(locale(), "Actualiser", "Refresh"),
-                        disabled: dashboard.pending(),
-                        onclick: move |_| *refresh_version.write() += 1,
-                        RefreshIcon {}
-                    }
                 }
             }
+            }
 
-            if pro_signin_open() && !pro_enabled {
+            if !embed_mode && pro_signin_open() && !pro_enabled {
                 div { class: "pro-signin",
                     strong { "Pro" }
                     input {
@@ -403,7 +442,9 @@ fn App() -> Element {
                         locale: locale(),
                         selected_station,
                         focus_mode: focus_mode(),
+                        embed_mode,
                         pro_enabled,
+                        live_clock: live_clock(),
                     }
                 },
                 Some(Err(error)) => rsx! {
@@ -429,7 +470,9 @@ fn DashboardView(
     locale: Locale,
     mut selected_station: Signal<String>,
     focus_mode: bool,
+    embed_mode: bool,
     pro_enabled: bool,
+    live_clock: String,
 ) -> Element {
     let river_stations = data
         .stations
@@ -439,21 +482,32 @@ fn DashboardView(
         .collect::<Vec<_>>();
     let selected = river_stations
         .iter()
-        .find(|station| station.id == selected_station())
+        .find(|station| station_matches(station, &selected_station()))
         .or_else(|| river_stations.first())
         .cloned();
+    let air_temperature = data.air_temperature.clone();
+    let air_temperature_label = data
+        .air_temperature
+        .as_ref()
+        .and_then(|air| air.current.as_ref())
+        .map(|metric| format_metric_value(metric.value, &metric.unit, MetricKind::Temperature));
 
     rsx! {
-        div { class: if focus_mode { "dashboard dashboard-focus" } else { "dashboard" },
+        div { class: if focus_mode { "dashboard dashboard-focus" } else if embed_mode { "dashboard dashboard-embed" } else { "dashboard" },
             if let Some(station) = selected {
                 StationPanel {
                     station,
                     locale,
+                    focus_mode,
+                    embed_mode,
                     pro_enabled,
+                    air_temperature: air_temperature.clone(),
+                    air_temperature_label: air_temperature_label.clone(),
+                    live_clock: live_clock.clone(),
                 }
             }
 
-            if !focus_mode {
+            if !focus_mode && !embed_mode {
                 div { class: "station-tabs station-tabs-bottom",
                     for station in river_stations {
                         button {
@@ -461,7 +515,7 @@ fn DashboardView(
                             r#type: "button",
                             onclick: move |_| selected_station.set(station.id.clone()),
                             strong { "{station_title(&station, locale)}" }
-                            small { "{station_subtitle(&station, locale)}" }
+                            small { "{station_tab_detail(locale)}" }
                         }
                     }
                 }
@@ -477,27 +531,26 @@ fn DashboardView(
 
 #[component]
 fn SourceStrip(data: DashboardData, locale: Locale) -> Element {
-    let updated = format_timestamp(&data.generated_at, locale);
-    let cache_class = match data.cache_status {
-        CacheStatus::Fresh => "cache fresh",
-        CacheStatus::Stale => "cache stale",
-    };
-    let cache_label = match data.cache_status {
-        CacheStatus::Fresh => tr(locale, "frais", "fresh"),
-        CacheStatus::Stale => tr(locale, "périmé", "stale"),
+    let sources = if data.sources.is_empty() {
+        vec![data.source.clone()]
+    } else {
+        data.sources.clone()
     };
 
     rsx! {
         div { class: "source-strip source-strip-footer",
-            div {
+            div { class: "source-list",
                 span { class: "label", "{tr(locale, \"Sources\", \"Sources\")}" }
-                a { href: "{data.source.url}", target: "_blank", rel: "noreferrer", "{data.source.label}" }
+                div { class: "source-links",
+                    for source in sources {
+                        if source.url.is_empty() {
+                            span { "{source.label}" }
+                        } else {
+                            a { href: "{source.url}", target: "_blank", rel: "noreferrer", "{source.label}" }
+                        }
+                    }
+                }
             }
-            div {
-                span { class: "label", "{tr(locale, \"Dernière mise à jour\", \"Last updated\")}" }
-                span { "{updated}" }
-            }
-            span { class: "{cache_class}", "{cache_label}" }
             if !data.warnings.is_empty() {
                 span { class: "status-line", "{data.warnings.len()} {tr(locale, \"avert.\", \"warn.\")}" }
             }
@@ -506,7 +559,16 @@ fn SourceStrip(data: DashboardData, locale: Locale) -> Element {
 }
 
 #[component]
-fn StationPanel(station: StationData, locale: Locale, pro_enabled: bool) -> Element {
+fn StationPanel(
+    station: StationData,
+    locale: Locale,
+    focus_mode: bool,
+    embed_mode: bool,
+    pro_enabled: bool,
+    air_temperature: Option<AirTemperatureData>,
+    air_temperature_label: Option<String>,
+    live_clock: String,
+) -> Element {
     let hover_state = use_signal(|| None::<HoverState>);
     let domain = station_time_domain(&station, pro_enabled);
     let discharge_history = series_for_kind(&station.history, MetricKind::Discharge);
@@ -521,33 +583,107 @@ fn StationPanel(station: StationData, locale: Locale, pro_enabled: bool) -> Elem
     } else {
         None
     };
-    let station_notice = match locale {
-        Locale::Fr => station.notice_fr.clone(),
-        Locale::En => station.notice_en.clone(),
+    let air_temperature_overlay = if pro_enabled {
+        air_temperature.as_ref().map(|air| &air.history)
+    } else {
+        None
+    };
+    let station_notice = if station.source == StationDataSource::Derived {
+        match locale {
+            Locale::Fr => station.notice_fr.clone(),
+            Locale::En => station.notice_en.clone(),
+        }
+    } else {
+        None
     };
     let latest_measurement = latest_station_measurement(&station, locale);
+    let measurement_readout = hover_state()
+        .map(|hover| {
+            (
+                tr(locale, "Mesure à:", "Measurement at:").to_string(),
+                format_timestamp_from_seconds(hover.timestamp, locale),
+            )
+        })
+        .or_else(|| {
+            latest_measurement.clone().map(|timestamp| {
+                (
+                    tr(locale, "Dernière mesure", "Latest measurement").to_string(),
+                    timestamp,
+                )
+            })
+        });
+    let idle_hover_state = latest_station_timestamp(&station)
+        .and_then(|timestamp| hover_state_for_timestamp(timestamp, &domain));
+    let heading_subtitle = station_metric_context(&station, locale);
+    let measurement_station = station_measurement_station(&station, locale);
 
     rsx! {
         article { class: "station-panel",
             div { class: "station-heading",
-                div {
-                    h2 { "{station_title(&station, locale)}" }
-                    p { class: "location-subtitle", "{station_subtitle(&station, locale)}" }
-                    if let Some(latest_measurement) = latest_measurement {
-                        p { class: "station-last-measure",
-                            span { "{tr(locale, \"Dernière mesure\", \"Latest measurement\")}" }
-                            time { "{latest_measurement}" }
+                div { class: "station-heading-title",
+                    if focus_mode {
+                        h2 { class: "station-focus-title",
+                            span { class: "station-app-word", "{app_title(locale)}" }
+                            span { class: "station-focus-brand",
+                                span { class: "station-brand-copy",
+                                    "des"
+                                    br {}
+                                    "Pontonnier·ère·s"
+                                    br {}
+                                    "de Genève"
+                                }
+                                span { class: "partner-logo-icon station-brand-logo", "" }
+                            }
                         }
+                    } else if embed_mode {
+                        h2 { class: "station-embed-title",
+                            span { class: "station-app-word", "rhonoscope" }
+                            span { class: "station-embed-brand",
+                                span { class: "station-brand-copy",
+                                    "par les"
+                                    br {}
+                                    "Pontonnier·ère·s"
+                                    br {}
+                                    "de Genève"
+                                }
+                                span { class: "partner-logo-icon station-embed-logo", "" }
+                            }
+                        }
+                    } else {
+                        h2 { "{station_title(&station, locale)}" }
+                    }
+                }
+                div { class: "station-heading-side",
+                    div { class: "page-live-clock station-live-clock",
+                        span { class: "live-clock-label", "{tr(locale, \"Maintenant\", \"Now\")}" }
+                        time { class: "live-clock-time", "{live_clock}" }
+                        if let Some(air_temperature_label) = air_temperature_label {
+                            span { class: "live-clock-air",
+                                span { "{tr(locale, \"Air\", \"Air\")}" }
+                                strong { "{air_temperature_label}" }
+                            }
+                        }
+                    }
+                    span {
+                        class: "station-header-qr",
+                        role: "img",
+                        aria_label: "QR code Pontonnier·ère·s de Genève",
+                        ""
                     }
                 }
             }
 
             div { class: "chart-stack",
+                div { class: "chart-measure-row",
+                    p { class: "chart-context-label", "{heading_subtitle}" }
+                }
+
                 TimeAxis {
                     domain: domain.clone(),
                     placement: "top".to_string(),
                     locale,
                     hover_state,
+                    idle_hover_state,
                 }
 
                 {metric_chart(
@@ -558,14 +694,21 @@ fn StationPanel(station: StationData, locale: Locale, pro_enabled: bool) -> Elem
                     &domain,
                     locale,
                     hover_state,
+                    air_temperature_overlay,
+                    idle_hover_state,
                 )}
 
-                TimeAxis {
-                    domain: domain.clone(),
-                    placement: "middle".to_string(),
+                {metric_readout(
+                    &station,
+                    MetricKind::Temperature,
+                    temperature_history,
+                    temperature_forecast,
+                    &domain,
                     locale,
                     hover_state,
-                }
+                    None,
+                    "plot-current plot-current-stacked",
+                )}
 
                 {metric_chart(
                     &station,
@@ -575,20 +718,50 @@ fn StationPanel(station: StationData, locale: Locale, pro_enabled: bool) -> Elem
                     &domain,
                     locale,
                     hover_state,
+                    None,
+                    idle_hover_state,
                 )}
 
                 TimeAxis {
-                    domain,
+                    domain: domain.clone(),
                     placement: "bottom".to_string(),
                     locale,
                     hover_state,
+                    idle_hover_state,
+                }
+
+                {metric_readout(
+                    &station,
+                    MetricKind::Discharge,
+                    discharge_history,
+                    discharge_forecast,
+                    &domain,
+                    locale,
+                    hover_state,
+                    None,
+                    "plot-current plot-current-stacked",
+                )}
+
+                if let Some((measurement_label, measurement_time)) = measurement_readout {
+                    div { class: "chart-measure-footer",
+                        p { class: "plot-last-measure plot-last-measure-chart",
+                            span { "{measurement_label}" }
+                            time { "{measurement_time}" }
+                        }
+                    }
                 }
             }
 
-            if let Some(notice) = station_notice {
+            div { class: "station-footnotes",
                 p { class: "station-footnote",
-                    strong { "{tr(locale, \"Note\", \"Note\")}" }
-                    span { "{notice}" }
+                    strong { "{tr(locale, \"Station\", \"Station\")}" }
+                    span { "{measurement_station}" }
+                }
+                if let Some(notice) = station_notice {
+                    p { class: "station-footnote",
+                        strong { "{tr(locale, \"Note\", \"Note\")}" }
+                        span { "{notice}" }
+                    }
                 }
             }
         }
@@ -601,6 +774,7 @@ fn TimeAxis(
     placement: String,
     locale: Locale,
     hover_state: Signal<Option<HoverState>>,
+    idle_hover_state: Option<HoverState>,
 ) -> Element {
     let axis_class = format!("shared-time-axis time-axis-{placement}");
     let width_style = format!(
@@ -608,6 +782,7 @@ fn TimeAxis(
         domain.content_width_percent
     );
     let hover_position = hover_state()
+        .or(idle_hover_state)
         .map(|hover| hover.position)
         .filter(|position| (0.0..=100.0).contains(position));
 
@@ -637,13 +812,15 @@ fn TimeAxis(
                         }
                         div { class: "axis-labels",
                             for tick in domain.ticks.iter() {
-                                span {
-                                    class: "{axis_label_class(tick)}",
-                                    style: format!("left: {:.3}%;", tick.position),
-                                    span { class: "axis-label-full", "{axis_label_full(tick)}" }
-                                    span { class: "axis-label-wide", "{axis_label_wide(tick, locale)}" }
-                                    span { class: "axis-label-medium", "{axis_label_medium(tick, locale)}" }
-                                    span { class: "axis-label-short", "{axis_label_short(tick, locale)}" }
+                                if tick.kind != AxisTickKind::Midnight {
+                                    span {
+                                        class: "{axis_label_class(tick)}",
+                                        style: format!("left: {:.3}%;", tick.position),
+                                        span { class: "axis-label-full", "{axis_label_full(tick, locale)}" }
+                                        span { class: "axis-label-wide", "{axis_label_wide(tick, locale)}" }
+                                        span { class: "axis-label-medium", "{axis_label_medium(tick, locale)}" }
+                                        span { class: "axis-label-short", "{axis_label_short(tick, locale)}" }
+                                    }
                                 }
                             }
                         }
@@ -677,6 +854,8 @@ fn metric_chart(
     domain: &TimeDomain,
     locale: Locale,
     mut hover_state: Signal<Option<HoverState>>,
+    air_overlay: Option<&MetricSeries>,
+    idle_hover_state: Option<HoverState>,
 ) -> Element {
     let history_points = history
         .map(|series| timed_points(&series.points))
@@ -686,6 +865,13 @@ fn metric_chart(
         .unwrap_or_default();
     let history_points = points_in_domain(&history_points, domain);
     let forecast_points = points_in_domain(&forecast_points, domain);
+    let air_overlay_points = if kind == MetricKind::Temperature {
+        air_overlay
+            .map(|series| points_in_domain(&timed_points(&series.points), domain))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let unit = history
         .or(forecast)
         .map(|series| series.unit.clone())
@@ -696,24 +882,8 @@ fn metric_chart(
         "width: {:.3}%; min-width: var(--chart-content-min-width, 100%);",
         domain.content_width_percent
     );
-    let current = current_for_kind(station, kind);
-    let hovered = hover_state()
-        .and_then(|hover| sample_point_at(hover.timestamp, &history_points, &forecast_points));
-    let readout_value = hovered
-        .as_ref()
-        .map(|point| point.value)
-        .or_else(|| current.map(|metric| metric.value));
-    let formatted_value = readout_value
-        .map(|value| format_metric_value(value, &unit, kind))
-        .unwrap_or_else(|| "—".to_string());
     let discharge_reference = if kind == MetricKind::Discharge {
         Some(discharge_reference_max(station))
-    } else {
-        None
-    };
-    let safety = if kind == MetricKind::Discharge {
-        discharge_reference
-            .and_then(|reference| readout_value.map(|value| discharge_safety(value, reference)))
     } else {
         None
     };
@@ -730,25 +900,12 @@ fn metric_chart(
     } else {
         "custom-y-axis custom-y-axis-right has-risk-scale"
     };
-    let chart_class = safety
-        .map(|safety| {
-            format!(
-                "chart-card {} {}",
-                metric_kind_class(kind),
-                safety_class(safety)
-            )
-        })
-        .unwrap_or_else(|| format!("chart-card {}", metric_kind_class(kind)));
-    let readout_class = safety
-        .map(|safety| format!("readout-value {}", safety_class(safety)))
-        .unwrap_or_else(|| "readout-value".to_string());
-    let hover_time = hovered
-        .as_ref()
-        .map(|point| format_timestamp_from_seconds(point.timestamp, locale));
-    let hover_position = hover_state()
+    let chart_class = format!("chart-card {}", metric_kind_class(kind));
+    let cursor_hover = hover_state().or(idle_hover_state);
+    let hover_position = cursor_hover
         .map(|hover| hover.position)
         .filter(|position| (0.0..=100.0).contains(position));
-    let hover_point = hover_state().and_then(|hover| {
+    let hover_point = cursor_hover.and_then(|hover| {
         sample_point_at(hover.timestamp, &history_points, &forecast_points)
             .map(|point| (hover.position, value_position(point.value, &axis)))
     });
@@ -758,6 +915,7 @@ fn metric_chart(
     let history_area = area_path(&history_points, domain, &axis);
     let forecast_path = line_path(&forecast_points, domain, &axis);
     let forecast_area = area_path(&forecast_points, domain, &axis);
+    let air_overlay_path = line_path(&air_overlay_points, domain, &axis);
     let show_uncertainty = station.id != "2606";
     let uncertainty_path = history
         .and_then(|series| series.uncertainty.as_ref())
@@ -770,7 +928,7 @@ fn metric_chart(
                 div { class: "chart-frame",
                     div { class: "custom-chart",
                         div { class: "{y_axis_class}",
-                            div { class: "custom-y-axis-title", "{axis_title(kind, locale, &unit)}" }
+                            {axis_title_view(kind, locale, &unit)}
                             if !risk_axis_segments.is_empty() {
                                 div { class: "risk-axis-scale", aria_hidden: "true",
                                     for segment in risk_axis_segments.iter() {
@@ -790,7 +948,7 @@ fn metric_chart(
                             }
                         }
                         div { class: "{y_axis_right_class}",
-                            div { class: "custom-y-axis-title", "{axis_title(kind, locale, &unit)}" }
+                            {axis_title_view(kind, locale, &unit)}
                             if !risk_axis_segments.is_empty() {
                                 div { class: "risk-axis-scale", aria_hidden: "true",
                                     for segment in risk_axis_segments.iter() {
@@ -843,6 +1001,7 @@ fn metric_chart(
                                         g { class: "custom-grid-x",
                                             for tick in domain.ticks.iter() {
                                                 line {
+                                                    class: tick_kind_class(tick.kind),
                                                     x1: format!("{:.3}", tick.position * SVG_PLOT_WIDTH / 100.0),
                                                     x2: format!("{:.3}", tick.position * SVG_PLOT_WIDTH / 100.0),
                                                     y1: "0",
@@ -891,6 +1050,12 @@ fn metric_chart(
                                                 d: "{path}",
                                             }
                                         }
+                                        if let Some(path) = air_overlay_path {
+                                            path {
+                                                class: "custom-line air-temperature",
+                                                d: "{path}",
+                                            }
+                                        }
                                     }
 
                                     div {
@@ -927,23 +1092,118 @@ fn metric_chart(
                     }
                 }
 
-                div { class: "plot-current",
-                    div { class: "plot-current-heading",
-                        h3 { "{metric_title(kind, locale)}" }
-                        if let Some(hover_time) = hover_time.clone() {
-                            small { "{hover_time}" }
-                        }
-                    }
-                    div { class: "plot-readout",
-                        strong { class: "{readout_class}", "{formatted_value}" }
-                        if let Some(safety) = safety {
-                            span {
-                                class: format!("discharge-comment {}", safety_class(safety)),
-                                "{safety_label(safety, locale)}"
-                            }
-                        }
+                {metric_readout(
+                    station,
+                    kind,
+                    history,
+                    forecast,
+                    domain,
+                    locale,
+                    hover_state,
+                    None,
+                    "plot-current plot-current-inline",
+                )}
+            }
+        }
+    }
+}
+
+fn metric_readout(
+    station: &StationData,
+    kind: MetricKind,
+    history: Option<&MetricSeries>,
+    forecast: Option<&MetricSeries>,
+    domain: &TimeDomain,
+    locale: Locale,
+    hover_state: Signal<Option<HoverState>>,
+    measurement_readout: Option<(String, String)>,
+    class_name: &str,
+) -> Element {
+    let history_points = history
+        .map(|series| timed_points(&series.points))
+        .unwrap_or_default();
+    let forecast_points = forecast
+        .map(|series| timed_points(&series.points))
+        .unwrap_or_default();
+    let history_points = points_in_domain(&history_points, domain);
+    let forecast_points = points_in_domain(&forecast_points, domain);
+    let unit = history
+        .or(forecast)
+        .map(|series| series.unit.clone())
+        .or_else(|| current_for_kind(station, kind).map(|metric| metric.unit.clone()))
+        .unwrap_or_else(|| default_unit(kind).to_string());
+    let current = current_for_kind(station, kind);
+    let hovered = hover_state()
+        .and_then(|hover| sample_point_at(hover.timestamp, &history_points, &forecast_points));
+    let readout_value = hovered
+        .as_ref()
+        .map(|point| point.value)
+        .or_else(|| current.map(|metric| metric.value));
+    let formatted_value = readout_value
+        .map(|value| format_metric_number(value, kind))
+        .unwrap_or_else(|| "—".to_string());
+    let discharge_reference = if kind == MetricKind::Discharge {
+        Some(discharge_reference_max(station))
+    } else {
+        None
+    };
+    let safety = if kind == MetricKind::Discharge {
+        discharge_reference
+            .and_then(|reference| readout_value.map(|value| discharge_safety(value, reference)))
+    } else {
+        None
+    };
+    let readout_class = safety
+        .map(|safety| {
+            format!(
+                "readout-value {} {}",
+                metric_kind_class(kind),
+                safety_class(safety)
+            )
+        })
+        .unwrap_or_else(|| format!("readout-value {}", metric_kind_class(kind)));
+
+    rsx! {
+        div { class: "{class_name}",
+            div { class: "plot-current-heading",
+                h3 { "{metric_title(kind, locale)}" }
+            }
+            div { class: "plot-readout",
+                {metric_value(readout_class, formatted_value, unit.clone(), kind)}
+                if let Some(safety) = safety {
+                    span {
+                        class: format!("discharge-comment {}", safety_class(safety)),
+                        "{safety_label(safety, locale)}"
                     }
                 }
+                if let Some((measurement_label, measurement_time)) = measurement_readout {
+                    p { class: "plot-last-measure plot-last-measure-inline",
+                        span { "{measurement_label}" }
+                        time { "{measurement_time}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn metric_value(class_name: String, value: String, unit: String, _kind: MetricKind) -> Element {
+    rsx! {
+        strong { class: "{class_name}",
+            span { class: "metric-number", "{value}" }
+            span { class: "metric-unit", "{unit}" }
+        }
+    }
+}
+
+fn axis_title_view(kind: MetricKind, locale: Locale, unit: &str) -> Element {
+    let title = metric_title(kind, locale);
+
+    rsx! {
+        div { class: "custom-y-axis-title",
+            span { class: "axis-title-label", "{title}" }
+            span { class: "axis-title-unit",
+                " ({unit})"
             }
         }
     }
@@ -978,6 +1238,15 @@ fn current_for_kind(station: &StationData, kind: MetricKind) -> Option<&CurrentM
 }
 
 fn latest_station_measurement(station: &StationData, locale: Locale) -> Option<String> {
+    latest_station_timestamp_with_label(station)
+        .map(|(_, timestamp)| format_timestamp(timestamp, locale))
+}
+
+fn latest_station_timestamp(station: &StationData) -> Option<f64> {
+    latest_station_timestamp_with_label(station).map(|(timestamp, _)| timestamp)
+}
+
+fn latest_station_timestamp_with_label(station: &StationData) -> Option<(f64, &str)> {
     station
         .current
         .iter()
@@ -996,7 +1265,17 @@ fn latest_station_measurement(station: &StationData, locale: Locale) -> Option<S
                 .partial_cmp(&right.0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|(_, timestamp)| format_timestamp(timestamp, locale))
+}
+
+fn hover_state_for_timestamp(timestamp: f64, domain: &TimeDomain) -> Option<HoverState> {
+    if !timestamp.is_finite() || timestamp < domain.min || timestamp > domain.max {
+        return None;
+    }
+    let span = (domain.max - domain.min).max(1.0);
+    Some(HoverState {
+        timestamp,
+        position: ((timestamp - domain.min) / span * 100.0).clamp(0.0, 100.0),
+    })
 }
 
 fn timed_points(points: &[HistoryPoint]) -> Vec<TimedPoint> {
@@ -1034,32 +1313,21 @@ fn value_axis(
     forecast: &[TimedPoint],
 ) -> ValueAxis {
     match kind {
-        MetricKind::Temperature => ValueAxis {
-            min: 5.0,
-            max: 30.0,
-            ticks: vec![
-                ValueTick {
-                    label: "30".to_string(),
-                    value: 30.0,
-                    position: 0.0,
-                },
-                ValueTick {
-                    label: "20".to_string(),
-                    value: 20.0,
-                    position: value_position(20.0, &ValueAxis::bare(5.0, 30.0)),
-                },
-                ValueTick {
-                    label: "10".to_string(),
-                    value: 10.0,
-                    position: value_position(10.0, &ValueAxis::bare(5.0, 30.0)),
-                },
-                ValueTick {
-                    label: "5".to_string(),
-                    value: 5.0,
-                    position: 100.0,
-                },
-            ],
-        },
+        MetricKind::Temperature => {
+            let axis = ValueAxis::bare(5.0, 30.0);
+            ValueAxis {
+                min: axis.min,
+                max: axis.max,
+                ticks: [30.0, 25.0, 20.0, 15.0, 10.0, 5.0]
+                    .into_iter()
+                    .map(|value| ValueTick {
+                        label: format!("{value:.0}"),
+                        value,
+                        position: value_position(value, &axis),
+                    })
+                    .collect(),
+            }
+        }
         MetricKind::Discharge => {
             let observed_max = history
                 .iter()
@@ -1337,14 +1605,14 @@ fn time_ticks(min: f64, max: f64) -> Vec<AxisTick> {
         let timestamp = cursor.timestamp() as f64;
         let hour = cursor.hour();
         let kind = if hour == 0 {
-            AxisTickKind::Day
+            AxisTickKind::Midnight
         } else if hour == 12 {
             AxisTickKind::Noon
         } else {
             AxisTickKind::Hour
         };
         let label = match kind {
-            AxisTickKind::Day => cursor.format("%d.%m").to_string(),
+            AxisTickKind::Midnight => String::new(),
             AxisTickKind::Noon => "12".to_string(),
             AxisTickKind::Hour => format!("{hour:02}"),
         };
@@ -1482,12 +1750,13 @@ fn mouse_ratio(event: &MouseEvent) -> Option<f64> {
         let target = web_event
             .target()
             .and_then(|target| target.dyn_into::<web_sys::Element>().ok())?;
-        let capture = target
-            .closest(".hover-capture")
+        let ratio_source = target
+            .closest(".plot-scroll-content")
             .ok()
             .flatten()
+            .or_else(|| target.closest(".hover-capture").ok().flatten())
             .unwrap_or(target);
-        let rect = capture.get_bounding_client_rect();
+        let rect = ratio_source.get_bounding_client_rect();
         if rect.width() <= 0.0 {
             return None;
         }
@@ -1673,26 +1942,83 @@ fn api_url(path: &str) -> String {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn register_service_worker() {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    if can_register_service_worker(&window) {
-        let _ = window.navigator().service_worker().register("/sw.js");
+fn initial_locale() -> Locale {
+    match query_param("lang")
+        .or_else(|| query_param("locale"))
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("en") | Some("eng") | Some("english") => Locale::En,
+        _ => Locale::Fr,
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn can_register_service_worker(window: &web_sys::Window) -> bool {
-    if window.is_secure_context() {
-        return true;
+fn initial_embed_config() -> Option<EmbedConfig> {
+    let embed = query_param("embed")?;
+    let embed = embed.trim();
+    if matches!(
+        embed.to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+    ) {
+        return None;
     }
 
-    let location = window.location();
-    let protocol = location.protocol().unwrap_or_default();
-    let hostname = location.hostname().unwrap_or_default();
-    protocol == "https:" || hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
+    let station = query_param("station")
+        .or_else(|| {
+            if embed.is_empty()
+                || matches!(
+                    embed.to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            {
+                None
+            } else {
+                Some(embed.to_string())
+            }
+        })
+        .map(|station| station.trim().to_string())
+        .filter(|station| !station.is_empty())
+        .unwrap_or_else(|| "2606".to_string());
+
+    Some(EmbedConfig { station })
+}
+
+fn initial_station_id(embed: Option<&EmbedConfig>) -> String {
+    embed
+        .map(|config| config.station.clone())
+        .or_else(|| query_param("station"))
+        .map(|station| station.trim().to_string())
+        .filter(|station| !station.is_empty())
+        .unwrap_or_else(|| "2606".to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn query_param(name: &str) -> Option<String> {
+    web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .and_then(|search| parse_query_param(&search, name))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn query_param(name: &str) -> Option<String> {
+    let _ = name;
+    None
+}
+
+fn parse_query_param(query: &str, name: &str) -> Option<String> {
+    query
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|part| !part.is_empty())
+        .find_map(|part| {
+            let mut pair = part.splitn(2, '=');
+            let key = pair.next()?;
+            if key != name {
+                return None;
+            }
+            Some(pair.next().unwrap_or_default().replace('+', " "))
+        })
 }
 
 fn read_stored_pro_token() -> Option<String> {
@@ -1763,17 +2089,58 @@ fn tr<'a>(locale: Locale, fr: &'a str, en: &'a str) -> &'a str {
     }
 }
 
+fn app_title(locale: Locale) -> &'static str {
+    tr(locale, "rhonometre", "rhonometer")
+}
+
+fn station_matches(station: &StationData, requested: &str) -> bool {
+    station.id == requested || station.slug == requested
+}
+
 fn station_title(station: &StationData, locale: Locale) -> String {
-    match locale {
+    let title = match locale {
         Locale::Fr => station.role_fr.clone(),
         Locale::En => station.role_en.clone(),
+    };
+    station_display_text(station, title)
+}
+
+fn station_measurement_station(station: &StationData, locale: Locale) -> String {
+    let station_name = match locale {
+        Locale::Fr => station.name_fr.clone(),
+        Locale::En => station.name_en.clone(),
+    };
+    station_display_text(station, station_name)
+}
+
+fn station_metric_context(station: &StationData, locale: Locale) -> String {
+    let title = station_title(station, locale);
+    match locale {
+        Locale::Fr => {
+            if title.starts_with("Arve") {
+                format!("Température et débit de l'{title}")
+            } else if title.starts_with("Lac") {
+                format!("Température du {title}")
+            } else {
+                format!("Température et débit du {title}")
+            }
+        }
+        Locale::En => format!("Temperature and discharge: {title}"),
     }
 }
 
-fn station_subtitle(station: &StationData, locale: Locale) -> String {
-    match locale {
-        Locale::Fr => station.name_fr.clone(),
-        Locale::En => station.name_en.clone(),
+fn station_tab_detail(locale: Locale) -> &'static str {
+    tr(locale, "Température et débit", "Temperature and discharge")
+}
+
+fn station_display_text(station: &StationData, text: String) -> String {
+    if station.source == StationDataSource::Derived {
+        text
+    } else {
+        text.replace(" (calculé)", "")
+            .replace(" (calcule)", "")
+            .replace(" (derived)", "")
+            .replace(" (estimated)", "")
     }
 }
 
@@ -1786,10 +2153,6 @@ fn metric_title(kind: MetricKind, locale: Locale) -> &'static str {
         (MetricKind::WaterLevel, Locale::Fr) => "Niveau",
         (MetricKind::WaterLevel, Locale::En) => "Water level",
     }
-}
-
-fn axis_title(kind: MetricKind, locale: Locale, unit: &str) -> String {
-    format!("{} ({unit})", metric_title(kind, locale))
 }
 
 fn default_unit(kind: MetricKind) -> &'static str {
@@ -1810,7 +2173,7 @@ fn metric_kind_class(kind: MetricKind) -> &'static str {
 
 fn tick_kind_class(kind: AxisTickKind) -> &'static str {
     match kind {
-        AxisTickKind::Day => "day",
+        AxisTickKind::Midnight => "midnight",
         AxisTickKind::Noon => "noon",
         AxisTickKind::Hour => "hour",
     }
@@ -1826,50 +2189,72 @@ fn axis_label_class(tick: &AxisTick) -> String {
     if tick.kind == AxisTickKind::Hour && (tick.position <= 5.5 || tick.position >= 94.5) {
         class.push_str(" edge-hour");
     }
-    if tick.kind == AxisTickKind::Noon && (tick.position <= 10.5 || tick.position >= 89.5) {
-        class.push_str(" edge-noon");
-    }
     class
 }
 
-fn axis_label_full(tick: &AxisTick) -> String {
+fn axis_label_full(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Day | AxisTickKind::Hour => tick.label.clone(),
-        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Midnight => String::new(),
+        AxisTickKind::Noon => date_label_full(tick.timestamp, locale),
+        AxisTickKind::Hour => tick.label.clone(),
     }
 }
 
 fn axis_label_wide(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Day => {
-            let Some(datetime) = DateTime::<Utc>::from_timestamp(tick.timestamp as i64, 0) else {
-                return axis_label_short(tick, locale);
-            };
-            format!(
-                "{} {}",
-                weekday_medium_label(tick.timestamp, locale),
-                datetime.with_timezone(&Local).day()
-            )
-        }
-        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Midnight => String::new(),
+        AxisTickKind::Noon => date_label_full(tick.timestamp, locale),
         AxisTickKind::Hour => tick.label.clone(),
     }
 }
 
 fn axis_label_medium(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Day => weekday_medium_label(tick.timestamp, locale).to_string(),
-        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Midnight => String::new(),
+        AxisTickKind::Noon => date_label_compact(tick.timestamp, locale, false),
         AxisTickKind::Hour => tick.label.clone(),
     }
 }
 
 fn axis_label_short(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Day => weekday_short_label(tick.timestamp, locale).to_string(),
-        AxisTickKind::Noon => "12:00".to_string(),
+        AxisTickKind::Midnight => String::new(),
+        AxisTickKind::Noon => date_label_compact(tick.timestamp, locale, true),
         AxisTickKind::Hour => tick.label.clone(),
     }
+}
+
+fn date_label_full(timestamp: f64, locale: Locale) -> String {
+    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp as i64, 0) else {
+        return String::new();
+    };
+    let local = datetime.with_timezone(&Local);
+    match locale {
+        Locale::Fr => format!(
+            "{} {:02}.{:02}",
+            weekday_medium_label(timestamp, locale),
+            local.day(),
+            local.month()
+        ),
+        Locale::En => format!(
+            "{} {} {}",
+            weekday_medium_label(timestamp, locale),
+            month_name_en(local.month()),
+            local.day()
+        ),
+    }
+}
+
+fn date_label_compact(timestamp: f64, locale: Locale, short_weekday: bool) -> String {
+    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp as i64, 0) else {
+        return String::new();
+    };
+    let weekday = if short_weekday {
+        weekday_short_label(timestamp, locale)
+    } else {
+        weekday_medium_label(timestamp, locale)
+    };
+    format!("{} {}", weekday, datetime.with_timezone(&Local).day())
 }
 
 fn weekday_short_label(timestamp: f64, locale: Locale) -> &'static str {
@@ -2049,6 +2434,14 @@ fn format_metric_value(value: f64, unit: &str, kind: MetricKind) -> String {
     }
 }
 
+fn format_metric_number(value: f64, kind: MetricKind) -> String {
+    match kind {
+        MetricKind::Temperature => format!("{value:.1}"),
+        MetricKind::Discharge => format!("{value:.0}"),
+        MetricKind::WaterLevel => format!("{value:.2}"),
+    }
+}
+
 fn format_timestamp(value: &str, locale: Locale) -> String {
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| {
@@ -2090,18 +2483,6 @@ fn FocusIcon(active: bool) -> Element {
                 path { d: "M21 3l-7 7" }
                 path { d: "M3 21l7-7" }
             }
-        }
-    }
-}
-
-#[component]
-fn RefreshIcon() -> Element {
-    rsx! {
-        svg { class: "button-icon", view_box: "0 0 24 24",
-            path { d: "M21 12a9 9 0 0 1-15.5 6.3" }
-            path { d: "M3 12A9 9 0 0 1 18.5 5.7" }
-            path { d: "M3 18v-6h6" }
-            path { d: "M21 6v6h-6" }
         }
     }
 }

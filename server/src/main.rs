@@ -47,6 +47,7 @@ const HYDRO_TEMPERATURE_URL: &str =
 const HYDRO_PQ_FORECAST_URL: &str =
     "https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_pq_forecast.geojson";
 const HYDRO_BASE_URL: &str = "https://www.hydrodaten.admin.ch";
+const OPEN_METEO_URL: &str = "https://api.open-meteo.com/v1/forecast";
 const CACHE_TTL: Duration = Duration::from_secs(120);
 const HISTORY_DAYS: i64 = 5;
 const CALIBRATION_HISTORY_DAYS: i64 = 40;
@@ -96,19 +97,29 @@ const SOURCE_STATIONS: &[StationConfig] = &[
         slug: "rhone-chancy",
         name_fr: "Rhône - Chancy, Aux Ripes",
         name_en: "Rhône - Chancy, Aux Ripes",
-        role_fr: "Rhône aval de la Jonction",
+        role_fr: "Rhône après la Jonction",
         role_en: "Post-Jonction Rhône",
         kind: WaterKind::River,
     },
 ];
+
+const HALLE_ILE_STATION: StationConfig = StationConfig {
+    id: "2606",
+    slug: "rhone-halle-ile",
+    name_fr: "Rhône - Genève, Halle de l'Ile",
+    name_en: "Rhône - Geneva, Halle de l'Ile",
+    role_fr: "Rhône avant la Jonction",
+    role_en: "Rhône before Jonction",
+    kind: WaterKind::River,
+};
 
 const DERIVED_HALLE_ILE_STATION: StationConfig = StationConfig {
     id: "2606",
     slug: "rhone-halle-ile",
     name_fr: "Rhône - Genève, Halle de l'Ile",
     name_en: "Rhône - Geneva, Halle de l'Ile",
-    role_fr: "Rhône avant la Jonction (calculé)",
-    role_en: "Rhône before Jonction (derived)",
+    role_fr: "Rhône avant la Jonction",
+    role_en: "Rhône before Jonction",
     kind: WaterKind::River,
 };
 
@@ -151,6 +162,8 @@ struct DashboardData {
     generated_at: String,
     cache_status: CacheStatus,
     source: SourceInfo,
+    sources: Vec<SourceInfo>,
+    air_temperature: Option<AirTemperatureData>,
     stations: Vec<StationData>,
     warnings: Vec<String>,
 }
@@ -181,8 +194,23 @@ struct StationData {
     history: Vec<MetricSeries>,
     forecast: Vec<MetricSeries>,
     status: StationStatus,
+    source: StationDataSource,
     notice_fr: Option<&'static str>,
     notice_en: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AirTemperatureData {
+    source: SourceInfo,
+    current: Option<CurrentMetric>,
+    history: MetricSeries,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StationDataSource {
+    Hydrodaten,
+    Derived,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -370,6 +398,26 @@ struct PlotTrace {
 #[derive(Debug, Deserialize)]
 struct PlotMeta {
     unit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoResponse {
+    current: Option<OpenMeteoCurrent>,
+    hourly: OpenMeteoHourly,
+    hourly_units: Option<HashMap<String, String>>,
+    current_units: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoCurrent {
+    time: String,
+    temperature_2m: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoHourly {
+    time: Vec<String>,
+    temperature_2m: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Error)]
@@ -994,130 +1042,224 @@ async fn fetch_dashboard(
     };
 
     for station in SOURCE_STATIONS {
-        let pq_feature = pq_by_station
-            .get(station.id)
-            .ok_or(FetchError::StationNotFound(station.id, HYDRO_PQ_URL))?;
-        let temperature_feature = temperature_by_station.get(station.id);
-
-        let mut current = parse_pq_current(pq_feature);
-        if let Some(feature) = temperature_feature {
-            if let Some(metric) = parse_temperature_current(feature) {
-                current.push(metric);
-            }
-        }
-
-        let mut history = Vec::new();
-        match fetch_pq_history(client, station).await {
-            Ok(mut series) => history.append(&mut series),
-            Err(err) => {
-                warn!(station = station.id, error = %err, "failed to fetch pq history");
-                warnings.push(format!(
-                    "Could not refresh discharge/water-level history for {}: {err}",
-                    station.id
-                ));
-            }
-        }
-
-        if temperature_feature.is_some() {
-            match fetch_temperature_history(client, station).await {
-                Ok(mut series) => history.append(&mut series),
-                Err(err) => {
-                    warn!(station = station.id, error = %err, "failed to fetch temperature history");
-                    warnings.push(format!(
-                        "Could not refresh temperature history for {}: {err}",
-                        station.id
-                    ));
-                }
-            }
-        }
-
-        let mut forecast = Vec::new();
-        if forecast_by_station
-            .as_ref()
-            .is_some_and(|features| features.contains_key(station.id))
-        {
-            match fetch_discharge_forecast(client, station).await {
-                Ok(series) => forecast.push(series),
-                Err(err) => {
-                    warn!(station = station.id, error = %err, "failed to fetch discharge forecast");
-                    warnings.push(format!(
-                        "Could not refresh discharge forecast for {}: {err}",
-                        station.id
-                    ));
-                }
-            }
-        }
-
-        let status = match (current.is_empty(), history.is_empty()) {
-            (false, false) => StationStatus::Complete,
-            (false, true) | (true, false) => StationStatus::Partial,
-            (true, true) => StationStatus::Missing,
-        };
-
-        stations.push(StationData {
-            id: station.id,
-            slug: station.slug,
-            name_fr: station.name_fr,
-            name_en: station.name_en,
-            role_fr: station.role_fr,
-            role_en: station.role_en,
-            kind: station.kind,
-            current,
-            history,
-            forecast,
-            status,
-            notice_fr: None,
-            notice_en: None,
-        });
+        stations.push(
+            fetch_hydrodaten_station_data(
+                client,
+                station,
+                &pq_by_station,
+                &temperature_by_station,
+                forecast_by_station.as_ref(),
+                &mut warnings,
+            )
+            .await?,
+        );
     }
 
-    let temperature_calibration = match fetch_temperature_calibration(client).await {
-        Ok(calibration) => {
-            info!(
-                heat_power_mw = calibration.heat_power_w / 1_000_000.0,
-                sample_count = calibration.sample_count,
-                median_absolute_error_c = ?calibration.median_absolute_error_c,
-                error_band_c = ?calibration.error_band_c,
-                "calibrated derived 2606 temperature"
+    let measured_halle_ile = match fetch_hydrodaten_station_data(
+        client,
+        &HALLE_ILE_STATION,
+        &pq_by_station,
+        &temperature_by_station,
+        forecast_by_station.as_ref(),
+        &mut warnings,
+    )
+    .await
+    {
+        Ok(station) if has_complete_temperature_and_discharge(&station) => Some(station),
+        Ok(station) => {
+            warn!(
+                station = station.id,
+                "Hydrodaten 2606 is present but incomplete; using derived fallback"
             );
-            Some(calibration)
+            None
         }
         Err(err) => {
-            warn!(error = %err, "failed to calibrate derived 2606 temperature");
-            warnings.push(format!(
-                "Could not calibrate the Rhône - Genève, Halle de l'Ile temperature estimate: {err}"
-            ));
+            warn!(error = %err, "Hydrodaten 2606 is unavailable; using derived fallback");
             None
         }
     };
 
-    match derive_halle_ile_station(
-        &stations,
-        temperature_calibration.as_ref(),
-        programme_forecasts.seujet.as_ref(),
-    ) {
-        Some(station) => stations.insert(1, station),
-        None => warnings.push(
-            "Could not derive Rhône - Genève, Halle de l'Ile from Arve and Chancy data".to_string(),
-        ),
+    if let Some(mut station) = measured_halle_ile {
+        apply_seujet_programme_forecast(&mut station, programme_forecasts.seujet.as_ref());
+        stations.insert(1, station);
+    } else {
+        let temperature_calibration = match fetch_temperature_calibration(client).await {
+            Ok(calibration) => {
+                info!(
+                    heat_power_mw = calibration.heat_power_w / 1_000_000.0,
+                    sample_count = calibration.sample_count,
+                    median_absolute_error_c = ?calibration.median_absolute_error_c,
+                    error_band_c = ?calibration.error_band_c,
+                    "calibrated derived 2606 temperature"
+                );
+                Some(calibration)
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to calibrate derived 2606 temperature");
+                warnings.push(format!(
+                    "Could not calibrate the Rhône - Genève, Halle de l'Ile temperature estimate: {err}"
+                ));
+                None
+            }
+        };
+
+        match derive_halle_ile_station(
+            &stations,
+            temperature_calibration.as_ref(),
+            programme_forecasts.seujet.as_ref(),
+        ) {
+            Some(station) => stations.insert(1, station),
+            None => warnings.push(
+                "Could not derive Rhône - Genève, Halle de l'Ile from Arve and Chancy data"
+                    .to_string(),
+            ),
+        }
     }
+
+    let air_temperature = match fetch_air_temperature(client).await {
+        Ok(air_temperature) => Some(air_temperature),
+        Err(err) => {
+            warn!(error = %err, "failed to fetch Open-Meteo air temperature");
+            warnings.push(format!("Could not refresh Geneva air temperature: {err}"));
+            None
+        }
+    };
+
+    let mut sources = vec![SourceInfo {
+        label: "Swiss Hydrodaten".to_string(),
+        url: "https://www.hydrodaten.admin.ch/de/seen-und-fluesse/messstationen-zustand"
+            .to_string(),
+    }];
+    if programme_forecasts.has_data() {
+        sources.push(SourceInfo {
+            label: "SIG discharge programme emails".to_string(),
+            url: String::new(),
+        });
+    }
+    if let Some(air_temperature) = air_temperature.as_ref() {
+        sources.push(air_temperature.source.clone());
+    }
+    let source_label = sources
+        .iter()
+        .map(|source| source.label.as_str())
+        .collect::<Vec<_>>()
+        .join(" + ");
 
     Ok(DashboardData {
         generated_at: chrono::Utc::now().to_rfc3339(),
         cache_status: CacheStatus::Fresh,
         source: SourceInfo {
-            label: if programme_forecasts.has_data() {
-                "Swiss Hydrodaten + SIG discharge programme"
-            } else {
-                "Swiss Hydrodaten"
-            }
-            .to_string(),
+            label: source_label,
             url: "https://www.hydrodaten.admin.ch/de/seen-und-fluesse/messstationen-zustand"
                 .to_string(),
         },
+        sources,
+        air_temperature,
         stations,
         warnings,
     })
+}
+
+async fn fetch_hydrodaten_station_data(
+    client: &Client,
+    station: &StationConfig,
+    pq_by_station: &HashMap<String, Feature>,
+    temperature_by_station: &HashMap<String, Feature>,
+    forecast_by_station: Option<&HashMap<String, Feature>>,
+    warnings: &mut Vec<String>,
+) -> Result<StationData, FetchError> {
+    let pq_feature = pq_by_station
+        .get(station.id)
+        .ok_or(FetchError::StationNotFound(station.id, HYDRO_PQ_URL))?;
+    let temperature_feature = temperature_by_station.get(station.id);
+
+    let mut current = parse_pq_current(pq_feature);
+    if let Some(feature) = temperature_feature {
+        if let Some(metric) = parse_temperature_current(feature) {
+            current.push(metric);
+        }
+    }
+
+    let mut history = Vec::new();
+    match fetch_pq_history(client, station).await {
+        Ok(mut series) => history.append(&mut series),
+        Err(err) => {
+            warn!(station = station.id, error = %err, "failed to fetch pq history");
+            warnings.push(format!(
+                "Could not refresh discharge/water-level history for {}: {err}",
+                station.id
+            ));
+        }
+    }
+
+    if temperature_feature.is_some() {
+        match fetch_temperature_history(client, station).await {
+            Ok(mut series) => history.append(&mut series),
+            Err(err) => {
+                warn!(station = station.id, error = %err, "failed to fetch temperature history");
+                warnings.push(format!(
+                    "Could not refresh temperature history for {}: {err}",
+                    station.id
+                ));
+            }
+        }
+    }
+
+    let mut forecast = Vec::new();
+    if forecast_by_station.is_some_and(|features| features.contains_key(station.id)) {
+        match fetch_discharge_forecast(client, station).await {
+            Ok(series) => forecast.push(series),
+            Err(err) => {
+                warn!(station = station.id, error = %err, "failed to fetch discharge forecast");
+                warnings.push(format!(
+                    "Could not refresh discharge forecast for {}: {err}",
+                    station.id
+                ));
+            }
+        }
+    }
+
+    let status = match (current.is_empty(), history.is_empty()) {
+        (false, false) => StationStatus::Complete,
+        (false, true) | (true, false) => StationStatus::Partial,
+        (true, true) => StationStatus::Missing,
+    };
+
+    Ok(StationData {
+        id: station.id,
+        slug: station.slug,
+        name_fr: station.name_fr,
+        name_en: station.name_en,
+        role_fr: station.role_fr,
+        role_en: station.role_en,
+        kind: station.kind,
+        current,
+        history,
+        forecast,
+        status,
+        source: StationDataSource::Hydrodaten,
+        notice_fr: None,
+        notice_en: None,
+    })
+}
+
+fn has_complete_temperature_and_discharge(station: &StationData) -> bool {
+    current_metric(station, MetricKind::Discharge).is_some()
+        && current_metric(station, MetricKind::Temperature).is_some()
+        && history_series(station, MetricKind::Discharge).is_some()
+        && history_series(station, MetricKind::Temperature).is_some()
+}
+
+fn apply_seujet_programme_forecast(
+    station: &mut StationData,
+    seujet_programme_forecast: Option<&MetricSeries>,
+) {
+    if let Some(series) = seujet_programme_forecast {
+        station
+            .forecast
+            .retain(|forecast| forecast.kind != MetricKind::Discharge);
+        station.forecast.push(series.clone());
+    }
 }
 
 fn derive_halle_ile_station(
@@ -1182,6 +1324,7 @@ fn derive_halle_ile_station(
         history,
         forecast,
         status,
+        source: StationDataSource::Derived,
         notice_fr: Some(
             "Estimation par bilan de chaleur calibré sur l'historique Arve/Chancy/2606: la station 2606 est hors ligne.",
         ),
@@ -1569,21 +1712,15 @@ async fn persist_dashboard(db: &PgPool, data: &DashboardData) -> Result<(), sqlx
         }
 
         for series in &station.history {
-            let source = if station.id == DERIVED_HALLE_ILE_STATION.id {
-                "derived"
-            } else {
-                "hydrodaten"
-            };
+            let source = station_data_source_key(station.source);
             persist_metric_series(db, station.id, "history", source, series).await?;
         }
 
         for series in &station.forecast {
             let source = if series.label_en == "SIG Seujet programme" {
                 "sig_programme"
-            } else if station.id == DERIVED_HALLE_ILE_STATION.id {
-                "derived"
             } else {
-                "hydrodaten"
+                station_data_source_key(station.source)
             };
             persist_metric_series(db, station.id, "forecast", source, series).await?;
         }
@@ -1600,6 +1737,13 @@ async fn persist_dashboard(db: &PgPool, data: &DashboardData) -> Result<(), sqlx
     }
 
     Ok(())
+}
+
+fn station_data_source_key(source: StationDataSource) -> &'static str {
+    match source {
+        StationDataSource::Hydrodaten => "hydrodaten",
+        StationDataSource::Derived => "derived",
+    }
 }
 
 async fn persist_metric_series(
@@ -2862,6 +3006,91 @@ async fn fetch_discharge_forecast(
         .into_iter()
         .find_map(parse_discharge_forecast_trace)
         .ok_or(FetchError::EmptyForecast(station.id))
+}
+
+async fn fetch_air_temperature(client: &Client) -> Result<AirTemperatureData, FetchError> {
+    let response = client
+        .get(OPEN_METEO_URL)
+        .query(&[
+            ("latitude", "46.2044"),
+            ("longitude", "6.1432"),
+            ("current", "temperature_2m"),
+            ("hourly", "temperature_2m"),
+            ("past_days", "5"),
+            ("forecast_days", "1"),
+            ("timezone", "Europe/Zurich"),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<OpenMeteoResponse>()
+        .await?;
+
+    let unit = response
+        .hourly_units
+        .as_ref()
+        .and_then(|units| units.get("temperature_2m"))
+        .or_else(|| {
+            response
+                .current_units
+                .as_ref()
+                .and_then(|units| units.get("temperature_2m"))
+        })
+        .cloned()
+        .unwrap_or_else(|| "°C".to_string());
+    let points = response
+        .hourly
+        .time
+        .into_iter()
+        .zip(response.hourly.temperature_2m)
+        .filter_map(|(timestamp, value)| {
+            Some(HistoryPoint {
+                timestamp: open_meteo_timestamp(&timestamp)?,
+                value: value?,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if points.is_empty() {
+        return Err(FetchError::EmptyHistory("open_meteo_air_temperature"));
+    }
+
+    let current = response.current.and_then(|current| {
+        Some(CurrentMetric {
+            kind: MetricKind::Temperature,
+            label_fr: "Température de l'air",
+            label_en: "Air temperature",
+            value: current.temperature_2m?,
+            unit: unit.clone(),
+            measured_at: open_meteo_timestamp(&current.time).unwrap_or(current.time),
+            range_24h: None,
+        })
+    });
+
+    Ok(AirTemperatureData {
+        source: SourceInfo {
+            label: "Open-Meteo".to_string(),
+            url: "https://open-meteo.com/".to_string(),
+        },
+        current,
+        history: MetricSeries {
+            kind: MetricKind::Temperature,
+            label_fr: "Température de l'air",
+            label_en: "Air temperature",
+            unit,
+            points,
+            uncertainty: None,
+        },
+    })
+}
+
+fn open_meteo_timestamp(value: &str) -> Option<String> {
+    let naive = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").ok()?;
+    let offset = geneva_offset(naive.date());
+    offset
+        .from_local_datetime(&naive)
+        .single()
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 async fn fetch_history(

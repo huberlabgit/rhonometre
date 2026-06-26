@@ -14,12 +14,19 @@
   --shadow: 0 14px 45px rgba(25, 38, 34, 0.10);
   --plot-left-inset: 62px;
   --plot-right-inset: 62px;
+  --chart-pad-x: 12px;
+  --chart-gap: 16px;
+  --value-column-width: minmax(210px, 280px);
   --chart-content-min-width: 100%;
   --plot-grid-line: rgba(97, 112, 106, 0.15);
+  --plot-midnight-line: rgba(23, 33, 29, 0.48);
   --plot-cursor-line: rgba(23, 33, 29, 0.52);
+  --font-ui: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", ui-sans-serif, system-ui,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-brand: "Hanken Grotesk", var(--font-ui);
+  --font-number: Inter, var(--font-ui);
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+    var(--font-ui);
 }
 
 * {
@@ -27,14 +34,19 @@
 }
 
 html,
-body {
+body,
+#app {
+  width: 100%;
+  max-width: 100%;
   min-height: 100%;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, rgba(15, 118, 110, 0.10), rgba(15, 118, 110, 0) 280px),
+    url("/public/rhone-background.jpg") center / cover no-repeat fixed,
     var(--bg);
   color: var(--ink);
   overflow-x: hidden;
@@ -53,18 +65,23 @@ a {
 }
 
 .app-shell {
-  width: min(1240px, calc(100vw - 20px));
+  width: calc(100% - 20px);
+  max-width: 1240px;
   margin: 0 auto;
   padding: 16px 0 36px;
+  min-width: 0;
 }
 
 .app-shell.focus-mode {
-  width: min(1480px, calc(100vw - 16px));
+  width: calc(100% - 16px);
+  max-width: 1480px;
   padding: 8px 0 20px;
 }
 
-.app-shell.focus-mode .topbar {
-  display: none;
+.app-shell.embed-mode {
+  width: 100%;
+  max-width: none;
+  padding: 0;
 }
 
 .focus-toggle-button {
@@ -84,11 +101,32 @@ a {
   border-color: rgba(15, 118, 110, 0.45);
 }
 
+.app-shell.focus-mode .focus-toggle-button {
+  right: auto;
+  left: 12px;
+}
+
+.focus-corner-logo {
+  position: fixed;
+  right: clamp(12px, 2vw, 24px);
+  bottom: clamp(12px, 2vw, 24px);
+  z-index: 12;
+  display: block;
+  width: clamp(72px, 8vw, 118px);
+  aspect-ratio: 1135 / 1179;
+  background-image: url("/public/Logo_Pontonniers_Round_White.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  pointer-events: none;
+}
+
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
+  min-width: 0;
   padding: 10px 0 18px;
 }
 
@@ -99,23 +137,27 @@ a {
 }
 
 .topbar h1 {
+  font-family: var(--font-brand);
   font-size: clamp(2.1rem, 6vw, 4.25rem);
   line-height: 0.95;
 }
 
 .brand-lockup {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   min-width: 0;
 }
 
 .partner-mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
   width: fit-content;
   max-width: 100%;
   color: var(--muted);
+  font-family: var(--font-brand);
   font-size: 0.78rem;
   font-weight: 850;
   line-height: 1.1;
@@ -150,6 +192,11 @@ a {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
+}
+
+.app-shell.focus-mode .topbar {
+  display: none;
 }
 
 .segmented {
@@ -263,6 +310,10 @@ a {
   gap: 0;
 }
 
+.dashboard-embed {
+  gap: 0;
+}
+
 .source-strip,
 .station-panel,
 .empty-state,
@@ -275,7 +326,7 @@ a {
 
 .source-strip {
   display: grid;
-  grid-template-columns: 1.2fr 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 14px 16px;
@@ -288,6 +339,20 @@ a {
 
 .source-strip-footer {
   box-shadow: none;
+}
+
+.source-list {
+  min-width: 0;
+}
+
+.source-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 750;
 }
 
 .label {
@@ -383,11 +448,37 @@ a {
   padding: 18px;
 }
 
+.app-shell.focus-mode .station-panel {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell.embed-mode .station-panel {
+  min-height: 100vh;
+  align-content: center;
+  gap: 8px;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell.embed-mode .station-header-qr {
+  display: none;
+}
+
 .station-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--chart-gap);
+  min-width: 0;
+  padding: 0 var(--chart-pad-x);
+}
+
+.station-heading-title {
+  min-width: 0;
 }
 
 .station-heading h2 {
@@ -403,38 +494,201 @@ a {
   line-height: 1.25;
 }
 
-.station-last-measure {
+.station-focus-brand {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 8px 0 0;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  gap: clamp(14px, 1.7vw, 24px);
+  max-width: 100%;
+  min-width: 0;
   color: var(--muted);
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 750;
-  line-height: 1.25;
+  font-family: var(--font-brand);
+  font-size: clamp(0.7rem, 1.2vw, 0.86rem);
+  font-weight: 850;
+  line-height: 1.05;
 }
 
-.station-last-measure span {
+.station-brand-copy {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.app-shell.focus-mode .station-focus-brand,
+.app-shell.focus-mode .station-focus-brand .station-brand-copy,
+.app-shell.embed-mode .station-embed-brand,
+.app-shell.embed-mode .station-embed-brand .station-brand-copy {
   color: var(--ink);
 }
 
-.page-live-clock {
+.station-focus-title {
+  --focus-logo-size: clamp(38px, 4.2vw, 58px);
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.station-embed-title {
+  --embed-logo-size: clamp(28px, 3.2vw, 42px);
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.station-app-word {
+  display: flex;
+  align-items: center;
   flex: 0 0 auto;
+  font-family: var(--font-brand);
+  font-size: clamp(2.25rem, 6.6vw, 4.9rem);
+  line-height: 0.82;
+}
+
+.station-embed-brand {
+  display: flex;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  gap: 10px;
+  max-width: 100%;
+  min-width: 0;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-family: var(--font-brand);
+  font-size: clamp(0.7rem, 1.2vw, 0.86rem);
+  font-weight: 850;
+  line-height: 1.05;
+}
+
+.station-embed-logo {
+  flex: 0 0 var(--embed-logo-size);
+  width: var(--embed-logo-size);
+  height: var(--embed-logo-size);
+  max-width: var(--embed-logo-size);
+  max-height: var(--embed-logo-size);
+  aspect-ratio: 1;
+}
+
+.station-brand-logo {
+  flex: 0 0 var(--focus-logo-size);
+  width: var(--focus-logo-size);
+  height: var(--focus-logo-size);
+  max-width: var(--focus-logo-size);
+  max-height: var(--focus-logo-size);
+  aspect-ratio: 1;
+}
+
+.app-shell.focus-mode .station-brand-logo {
+  display: none;
+}
+
+.station-heading-side {
+  --station-header-qr-size: clamp(44px, 4.8vw, 62px);
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.station-header-qr {
+  display: block;
+  flex: 0 0 var(--station-header-qr-size);
+  width: var(--station-header-qr-size);
+  height: var(--station-header-qr-size);
+  max-width: var(--station-header-qr-size);
+  max-height: var(--station-header-qr-size);
+  aspect-ratio: 1;
+  border: 1px solid rgba(23, 33, 29, 0.18);
+  background-color: #ffffff;
+  background-image: url("/public/pontonniers-geneve-qr.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.page-live-clock {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  color: var(--ink);
+  font-size: 1rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 750;
-  line-height: 1.2;
-  padding-top: 4px;
+  font-weight: 850;
+  line-height: 1.05;
   white-space: nowrap;
+}
+
+.station-live-clock {
+  justify-items: end;
+  min-width: 0;
+  text-align: right;
+}
+
+.live-clock-label {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.live-clock-time {
+  font-family: var(--font-number);
+  font-size: clamp(1.22rem, 2.3vw, 1.65rem);
+}
+
+.live-clock-air {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.live-clock-air strong {
+  color: var(--red);
+  font-family: var(--font-number);
+  font-size: 0.95rem;
+}
+
+.app-shell.focus-mode .station-live-clock,
+.app-shell.focus-mode .station-live-clock .live-clock-label,
+.app-shell.focus-mode .station-live-clock .live-clock-air,
+.app-shell.focus-mode .station-live-clock .live-clock-air strong,
+.app-shell.embed-mode .station-live-clock,
+.app-shell.embed-mode .station-live-clock .live-clock-label,
+.app-shell.embed-mode .station-live-clock .live-clock-air,
+.app-shell.embed-mode .station-live-clock .live-clock-air strong {
+  color: var(--ink);
+}
+
+.app-shell.focus-mode .station-live-clock .live-clock-air strong,
+.app-shell.embed-mode .station-live-clock .live-clock-air strong {
+  color: var(--red);
+}
+
+.station-footnotes {
+  display: grid;
+  gap: 4px;
+  margin: -7px 0 0;
 }
 
 .station-footnote {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin: -7px 0 0;
+  margin: 0;
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
@@ -452,6 +706,15 @@ a {
   overflow-wrap: anywhere;
 }
 
+.app-shell.focus-mode .station-footnote,
+.app-shell.focus-mode .station-footnote strong,
+.app-shell.focus-mode .station-footnote span,
+.app-shell.embed-mode .station-footnote,
+.app-shell.embed-mode .station-footnote strong,
+.app-shell.embed-mode .station-footnote span {
+  color: #ffffff;
+}
+
 .chart-stack {
   position: relative;
   display: grid;
@@ -463,11 +726,48 @@ a {
   background: #ffffff;
 }
 
+.app-shell.embed-mode .chart-stack {
+  border-radius: 0;
+}
+
+.chart-measure-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+  min-width: 0;
+  padding: 12px calc(var(--plot-right-inset) + var(--chart-pad-x) + 1px) 3px
+    calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
+}
+
+.chart-measure-footer {
+  display: grid;
+  align-items: end;
+  justify-items: end;
+  min-width: 0;
+  padding: 0 calc(var(--chart-pad-x) + 6px) 8px
+    calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
+}
+
+.chart-context-label {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(0.9rem, 1.2vw, 1.08rem);
+  font-weight: 750;
+  line-height: 1.18;
+}
+
+.app-shell.focus-mode .chart-context-label {
+  font-size: clamp(1.02rem, 1.7vw, 1.35rem);
+  font-weight: 900;
+  line-height: 1.12;
+}
+
 .chart-card {
   position: relative;
   z-index: 2;
   display: grid;
-  padding: 10px 12px;
+  padding: 10px var(--chart-pad-x);
   overflow: hidden;
   min-width: 0;
   --metric-axis: var(--muted);
@@ -483,16 +783,16 @@ a {
 }
 
 .chart-card.discharge {
-  --metric-axis: var(--blue);
-  --metric-line: #1d4ed8;
-  --metric-fill: #2563eb;
+  --metric-line: #1287a8;
+  --metric-axis: var(--metric-line);
+  --metric-fill: #1f9fc4;
   --metric-grid: rgba(37, 99, 235, 0.14);
 }
 
 .plot-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) var(--value-column-width);
+  gap: var(--chart-gap);
   align-items: stretch;
   min-width: 0;
 }
@@ -586,6 +886,7 @@ a {
   right: 4px;
   width: 32px;
   color: var(--metric-axis);
+  font-family: var(--font-number);
   font-size: 0.68rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -669,6 +970,11 @@ a {
   vector-effect: non-scaling-stroke;
 }
 
+.custom-grid-x line.midnight {
+  stroke: var(--plot-midnight-line);
+  stroke-width: 2;
+}
+
 .sun-shading rect {
   fill: rgba(23, 33, 29, 0.045);
 }
@@ -733,6 +1039,14 @@ a {
   stroke: var(--metric-line);
 }
 
+.custom-line.air-temperature {
+  stroke: #111827;
+  stroke-dasharray: 4 5;
+  stroke-linecap: butt;
+  stroke-width: 2.1;
+  opacity: 0.74;
+}
+
 .custom-line.safety-safe {
   stroke: #16803c;
 }
@@ -779,10 +1093,15 @@ a {
 .plot-current {
   display: grid;
   align-content: center;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   max-width: 100%;
   min-width: 0;
   padding-left: 8px;
+}
+
+.plot-current-stacked {
+  display: none;
 }
 
 .plot-current-heading {
@@ -805,6 +1124,8 @@ a {
 
 .plot-readout {
   display: grid;
+  align-content: start;
+  align-self: start;
   gap: 8px;
   min-width: 0;
 }
@@ -814,11 +1135,24 @@ a {
 }
 
 .plot-current strong {
-  font-size: clamp(1.85rem, 5vw, 3rem);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.16em;
+  font-family: var(--font-number);
+  font-size: clamp(2.35rem, 6.4vw, 3.95rem);
   line-height: 1;
   overflow-wrap: normal;
   white-space: nowrap;
   word-break: normal;
+}
+
+.metric-number,
+.metric-unit {
+  font-family: var(--font-number);
+}
+
+.readout-value.temperature {
+  color: var(--red);
 }
 
 .readout-value.safety-safe {
@@ -852,13 +1186,49 @@ a {
   color: #dc2626;
 }
 
+.plot-last-measure {
+  display: grid;
+  align-self: end;
+  gap: 1px;
+  min-width: 0;
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.plot-last-measure span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.plot-last-measure time {
+  color: var(--ink);
+  font-family: var(--font-number);
+  font-size: 0.98rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.plot-last-measure-chart {
+  justify-items: end;
+  margin: 0;
+  text-align: right;
+}
+
+.plot-last-measure-stacked {
+  display: none;
+}
+
 .shared-time-axis {
   position: relative;
   z-index: 3;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
-  gap: 16px;
-  padding: 0 16px;
+  grid-template-columns: minmax(0, 1fr) var(--value-column-width);
+  gap: var(--chart-gap);
+  padding: 0 var(--chart-pad-x);
   background: #ffffff;
   color: var(--muted);
 }
@@ -873,16 +1243,6 @@ a {
 
 .time-axis-top .axis-rule-top,
 .time-axis-bottom .axis-rule-bottom {
-  display: none;
-}
-
-.time-axis-top .axis-scroll-viewport,
-.time-axis-middle .axis-scroll-viewport {
-  scrollbar-width: none;
-}
-
-.time-axis-top .axis-scroll-viewport::-webkit-scrollbar,
-.time-axis-middle .axis-scroll-viewport::-webkit-scrollbar {
   display: none;
 }
 
@@ -903,8 +1263,11 @@ a {
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 2px;
-  scrollbar-color: rgba(97, 112, 106, 0.34) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.axis-scroll-viewport::-webkit-scrollbar {
+  display: none;
 }
 
 .axis-scroll-content {
@@ -943,9 +1306,10 @@ a {
   top: -1px;
 }
 
-.axis-tick-mark.day {
+.axis-tick-mark.midnight {
+  width: 2px;
   height: 8px;
-  background: rgba(97, 112, 106, 0.34);
+  background: var(--plot-midnight-line);
 }
 
 .axis-tick-mark.noon {
@@ -968,6 +1332,7 @@ a {
   top: 0;
   width: 26px;
   color: var(--muted);
+  font-family: var(--font-number);
   font-size: 0.68rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -980,19 +1345,15 @@ a {
   transform: translateX(-50%);
 }
 
-.axis-label.day {
-  width: 44px;
-  font-weight: 850;
-}
-
 .axis-label.hour {
   width: 24px;
   opacity: 0.72;
 }
 
 .axis-label.noon {
-  width: 36px;
-  opacity: 0.78;
+  width: 76px;
+  font-weight: 850;
+  opacity: 0.95;
 }
 
 .axis-label.edge-hour {
@@ -1013,19 +1374,6 @@ a {
 .axis-label-medium,
 .axis-label-short {
   display: none;
-}
-
-.time-axis-middle .axis-label {
-  top: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.time-axis-middle .axis-label.start {
-  transform: translateY(-50%);
-}
-
-.time-axis-middle .axis-label.end {
-  transform: translate(-100%, -50%);
 }
 
 .axis-hover-tick {
@@ -1102,10 +1450,6 @@ a {
     display: inline;
   }
 
-  .axis-label.day {
-    width: 44px;
-  }
-
   .axis-label.hour {
     display: none;
     opacity: 0.68;
@@ -1113,11 +1457,72 @@ a {
 
   .axis-label.noon {
     display: block;
-    width: 36px;
+    width: 68px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .station-heading {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0 calc(var(--plot-right-inset) + var(--chart-pad-x) + 1px) 0
+      calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
   }
 
-  .axis-label.edge-noon {
+  .app-shell.focus-mode .station-heading-side {
+    justify-self: end;
+  }
+
+  .app-shell.focus-mode .station-focus-title {
+    flex-wrap: nowrap;
+  }
+
+  .plot-row,
+  .shared-time-axis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plot-current-inline {
     display: none;
+  }
+
+  .plot-current-stacked {
+    display: grid;
+  }
+
+  .axis-spacer {
+    display: none;
+  }
+
+  .plot-current {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: end;
+    align-content: start;
+    gap: 4px;
+    padding: 9px var(--plot-right-inset) 0 var(--plot-left-inset);
+    text-align: right;
+  }
+
+  .plot-current-heading {
+    justify-items: end;
+    text-align: right;
+  }
+
+  .plot-readout {
+    justify-items: end;
+    text-align: right;
+  }
+
+  .plot-last-measure-inline {
+    display: none;
+  }
+
+  .plot-last-measure-stacked {
+    display: grid;
+    justify-items: end;
+    margin: -2px calc(var(--plot-right-inset) + var(--chart-pad-x) + 1px) 0
+      calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
+    text-align: right;
   }
 }
 
@@ -1134,8 +1539,8 @@ a {
     display: inline;
   }
 
-  .axis-label.day {
-    width: 28px;
+  .axis-label.noon {
+    width: 46px;
   }
 }
 
@@ -1152,25 +1557,38 @@ a {
     display: inline;
   }
 
-  .axis-label.day {
-    width: 20px;
-  }
-
   .axis-label.noon {
-    display: none;
-    width: 20px;
+    display: block;
+    width: 34px;
   }
 }
 
 @media (max-width: 900px) {
-  .topbar,
-  .station-heading {
-    align-items: stretch;
-    flex-direction: column;
+  :root {
+    --value-column-width: minmax(132px, 34vw);
+  }
+
+  .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    justify-items: stretch;
+    gap: 12px;
+  }
+
+  .page-live-clock {
+    justify-items: end;
+    padding-top: 2px;
+    text-align: right;
+  }
+
+  .brand-lockup {
+    text-align: left;
   }
 
   .topbar-actions {
-    justify-content: flex-start;
+    grid-column: 1 / -1;
+    justify-content: center;
+    width: 100%;
   }
 
   .partner-mark {
@@ -1182,37 +1600,28 @@ a {
     grid-template-columns: 1fr 1fr;
   }
 
-  .plot-row {
-    grid-template-columns: 1fr;
+  .plot-current strong {
+    font-size: clamp(1.8rem, 8.4vw, 2.85rem);
   }
 
-  .shared-time-axis {
-    grid-template-columns: 1fr;
-  }
-
-  .axis-spacer {
-    display: none;
-  }
-
-  .plot-current {
-    padding-top: 14px;
-    padding-left: 0;
-  }
-
-  .shared-time-axis {
-    padding-right: 16px;
+  .app-shell.focus-mode .station-focus-title {
+    --focus-logo-size: clamp(36px, 6vw, 52px);
   }
 }
 
 @media (max-width: 640px) {
   :root {
     --plot-left-inset: 50px;
-    --plot-right-inset: 50px;
+    --plot-right-inset: 42px;
+    --chart-pad-x: 6px;
+    --chart-gap: 8px;
+    --value-column-width: minmax(94px, 26vw);
     --chart-content-min-width: 150px;
   }
 
   .app-shell {
-    width: min(100vw - 12px, 1240px);
+    width: calc(100% - 12px);
+    max-width: 1240px;
     padding-top: 8px;
     padding-bottom: 20px;
   }
@@ -1231,7 +1640,88 @@ a {
   }
 
   .chart-card {
-    padding: 8px 6px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .chart-measure-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .chart-measure-footer {
+    padding-bottom: 6px;
+  }
+
+  .chart-context-label {
+    font-size: clamp(0.84rem, 3.7vw, 1rem);
+  }
+
+  .app-shell.focus-mode .chart-context-label {
+    font-size: clamp(0.98rem, 4.6vw, 1.24rem);
+  }
+
+  .station-heading {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 calc(var(--plot-right-inset) + var(--chart-pad-x) + 1px) 0
+      calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
+  }
+
+  .station-heading-side {
+    --station-header-qr-size: clamp(42px, 11vw, 52px);
+    justify-self: end;
+  }
+
+  .station-heading h2 {
+    font-size: clamp(1.22rem, 6vw, 1.72rem);
+  }
+
+  .location-subtitle {
+    font-size: 0.84rem;
+  }
+
+  .station-live-clock .live-clock-time {
+    font-size: clamp(1.05rem, 5.7vw, 1.45rem);
+  }
+
+  .station-live-clock .live-clock-air {
+    font-size: 0.7rem;
+  }
+
+  .app-shell.focus-mode .station-heading,
+  .app-shell.embed-mode .station-heading {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0;
+  }
+
+  .app-shell.focus-mode .station-focus-title {
+    --focus-logo-size: clamp(34px, 10vw, 48px);
+    gap: 6px;
+    width: 100%;
+  }
+
+  .app-shell.focus-mode .station-app-word {
+    font-size: clamp(1.65rem, 9.7vw, 2.85rem);
+  }
+
+  .app-shell.focus-mode .station-focus-brand {
+    gap: 5px;
+    flex: 1 1 auto;
+    width: auto;
+    overflow: visible;
+    font-size: clamp(0.43rem, 1.65vw, 0.56rem);
+  }
+
+  .app-shell.focus-mode .station-brand-copy {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-shell.focus-mode .station-live-clock {
+    justify-self: end;
+    margin-top: -2px;
   }
 
   .custom-y-axis-title {
@@ -1241,7 +1731,7 @@ a {
 
   .custom-y-axis-right .custom-y-axis-title {
     right: auto;
-    left: 35px;
+    left: 29px;
   }
 
   .risk-axis-scale {
@@ -1263,9 +1753,58 @@ a {
   }
 
   .plot-current {
-    gap: 10px;
+    padding: 8px var(--plot-right-inset) 0 var(--plot-left-inset);
   }
 
+  .plot-current-heading h3 {
+    font-size: 0.82rem;
+  }
+
+  .plot-current-heading small {
+    font-size: 0.68rem;
+  }
+
+  .plot-current strong {
+    font-size: clamp(1.62rem, 8.8vw, 2.45rem);
+  }
+
+  .discharge-comment {
+    max-width: 120px;
+    font-size: 0.66rem;
+    text-align: right;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-shell.focus-mode .station-heading,
+  .app-shell.embed-mode .station-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell.focus-mode .station-heading-side,
+  .app-shell.embed-mode .station-heading-side {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 420px) {
+  :root {
+    --plot-left-inset: 44px;
+    --plot-right-inset: 38px;
+    --value-column-width: minmax(88px, 25vw);
+  }
+
+  .custom-y-axis-title {
+    right: 30px;
+  }
+
+  .custom-y-axis-right .custom-y-axis-title {
+    left: 26px;
+  }
+
+  .custom-y-tick {
+    width: 22px;
+  }
 }
 
 @media (max-width: 360px) {

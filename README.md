@@ -9,22 +9,23 @@ The normal dashboard shows live discharge and temperature with five-day history.
 Default stations:
 
 - Arve - Genève, Bout du Monde (`2170`)
-- Rhône - Genève, Halle de l'Ile (`2606`, estimated while the station is offline)
+- Rhône - Genève, Halle de l'Ile (`2606`, measured when Hydrodaten is online, estimated fallback otherwise)
 - Lac Léman - Genève, Sécheron (`2028`, source data only)
 - Rhône - Chancy, Aux Ripes (`2174`, downstream/post-Jonction Rhône reference)
 
 The UI currently shows Arve, Halle de l'Ile, and Chancy tabs. Water level is stored when Hydrodaten exposes it, but the client does not render it.
 
-Hydrodaten currently publishes Rhône - Genève, Halle de l'Ile (`2606`) as missing and does not expose its seven-day JSON history. The app derives `2606` from Arve (`2170`) and downstream Rhône at Chancy (`2174`):
+The server prefers measured Hydrodaten data for Rhône - Genève, Halle de l'Ile (`2606`). If the station is unavailable or incomplete, the app derives `2606` from Arve (`2170`) and downstream Rhône at Chancy (`2174`):
 
 ```text
 Q_2606 = Q_2174 - Q_2170
 T_2606 = (Q_2174 * T_2174 - Q_2170 * T_2170) / Q_2606
 ```
 
-The temperature estimate is lagged before applying the heat balance: Chancy is downstream of the Jonction, so the server estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed `2606` temperature timestamp is therefore the estimated time when that water passed Halle de l'Ile.
+The fallback temperature estimate is lagged before applying the heat balance: Chancy is downstream of the Jonction, so the server estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed fallback `2606` temperature timestamp is therefore the estimated time when that water passed Halle de l'Ile.
 
 Pro forecasts prefer stored SIG "Programme débit" points for `2606`. Hydrodaten forecasts are used only when no SIG programme exists.
+The dashboard also fetches Geneva air temperature from Open-Meteo. Pro mode overlays that air-temperature series on the water-temperature plot.
 
 Hydrodaten endpoints used by the server:
 
@@ -66,6 +67,20 @@ nix run
 ```
 
 Then open `http://127.0.0.1:3000`. Without `DATABASE_URL`, the server still serves the live dashboard from Hydrodaten but does not persist refreshes or accept stored programme forecasts.
+
+Single-station iframe/embed URLs use the same app bundle:
+
+```html
+<iframe
+  src="http://127.0.0.1:3000/?embed=1&station=2174"
+  title="Rhonometre - Rhône Chancy"
+  width="100%"
+  height="760"
+  loading="lazy"
+></iframe>
+```
+
+`station` accepts either the Hydrodaten id (`2170`, `2606`, `2174`) or the station slug (`arve-bout-du-monde`, `rhone-halle-ile`, `rhone-chancy`). `?embed=2606` is a shorthand for the default French embed, and `lang=en` switches the labels to English.
 
 For a local Postgres-backed run:
 
