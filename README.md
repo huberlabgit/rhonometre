@@ -136,6 +136,14 @@ RHONOMETRE_PRO_CODE=...
 RHONOMETRE_TOKEN_SECRET=...
 ```
 
+For container orchestration where Postgres may start slightly after the app, the server retries
+database connection and schema migration on startup. Tune this with:
+
+```sh
+RHONOMETRE_DATABASE_CONNECT_ATTEMPTS=30
+RHONOMETRE_DATABASE_CONNECT_RETRY_SECONDS=2
+```
+
 Optional local programme import paths:
 
 ```sh
@@ -159,6 +167,26 @@ For an Infomaniak Jelastic environment that deploys from GitHub, use the root `D
 The container builds the Axum server and Dioxus web assets, listens on `0.0.0.0:8080`,
 and serves the frontend from `/app/dist`.
 
+The repo also includes a Jelastic import package at
+`deploy/jelastic/rhonometre.jps`. It creates one rhonometre app container and one
+PostgreSQL container, but it does not create resources until it is imported and installed
+from the Jelastic dashboard.
+
+Before importing the JPS package, publish a pullable image. The GitHub Actions workflow
+in `.github/workflows/docker.yml` publishes:
+
+```sh
+ghcr.io/lcnbr/rhonometre:latest
+```
+
+Import URL after pushing these files:
+
+```text
+https://raw.githubusercontent.com/lcnbr/rhonometre/main/deploy/jelastic/rhonometre.jps
+```
+
+See `deploy/jelastic/README.md` for the full pre-install checklist.
+
 Local Docker build test:
 
 ```sh
@@ -174,8 +202,8 @@ If you need an amd64 image from Apple Silicon, set
 
 Recommended Jelastic topology:
 
-- One Docker/custom application node built from this GitHub repository.
-- One PostgreSQL node managed by Jelastic/Infomaniak.
+- One Docker/custom application node using the published rhonometre image.
+- One PostgreSQL node, either from the included JPS Docker PostgreSQL container or a managed Jelastic/Infomaniak PostgreSQL node wired through `DATABASE_URL`.
 - Public HTTPS routing to the application node's HTTP port.
 
 Application environment variables:

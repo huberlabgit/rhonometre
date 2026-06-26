@@ -1,0 +1,104 @@
+type: install
+version: 1.0
+name: rhonometre
+displayName: rhonometre
+homepage: https://github.com/lcnbr/rhonometre
+description: |
+  Deploy rhonometre on Infomaniak Jelastic with one application container and one PostgreSQL container.
+
+  The application image must be pullable by Jelastic before installing this package. The default image is published by the GitHub Actions workflow in this repository.
+ssl: true
+skipNodeEmails: true
+
+settings:
+  fields:
+    - type: string
+      name: appImage
+      caption: Application Docker image
+      default: ghcr.io/lcnbr/rhonometre:latest
+      required: true
+
+    - type: string
+      inputType: password
+      name: dbPassword
+      caption: PostgreSQL password
+      required: true
+      regex: "^[A-Za-z0-9._~-]{16,128}$"
+      regexText: "Use 16-128 URL-safe characters: letters, numbers, dot, underscore, tilde, or hyphen."
+
+    - type: string
+      inputType: password
+      name: ingestToken
+      caption: Email ingest bearer token
+      required: true
+      regex: "^[A-Za-z0-9._~-]{24,256}$"
+      regexText: "Use at least 24 URL-safe characters."
+
+    - type: string
+      inputType: password
+      name: proCode
+      caption: Pro access code
+      required: true
+
+    - type: string
+      inputType: password
+      name: tokenSecret
+      caption: Pro session signing secret
+      required: true
+      regex: "^[A-Za-z0-9._~-]{32,256}$"
+      regexText: "Use at least 32 URL-safe characters."
+
+nodes:
+  - nodeType: docker
+    nodeGroup: db
+    displayName: PostgreSQL
+    image: postgres:16-alpine
+    cloudlets: 8
+    fixedCloudlets: 1
+    diskLimit: 10G
+    isSLBAccessEnabled: false
+    env:
+      POSTGRES_DB: "rhonometre"
+      POSTGRES_USER: "rhonometre"
+      POSTGRES_PASSWORD: "${settings.dbPassword}"
+    volumes:
+      - /var/lib/postgresql/data
+
+  - nodeType: docker
+    nodeGroup: cp
+    displayName: rhonometre
+    image: "${settings.appImage}"
+    cloudlets: 8
+    fixedCloudlets: 1
+    diskLimit: 5G
+    links:
+      - db:postgres
+    env:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      JELASTIC_PORTS: "8080"
+      STATIC_DIR: "/app/dist"
+      DATABASE_URL: "postgres://rhonometre:${settings.dbPassword}@postgres:5432/rhonometre"
+      RHONOMETRE_DATABASE_CONNECT_ATTEMPTS: "60"
+      RHONOMETRE_DATABASE_CONNECT_RETRY_SECONDS: "2"
+      RHONOMETRE_INGEST_TOKEN: "${settings.ingestToken}"
+      RHONOMETRE_PRO_CODE: "${settings.proCode}"
+      RHONOMETRE_TOKEN_SECRET: "${settings.tokenSecret}"
+      RHONOMETRE_PROGRAMME_DIR: "/data/programmes"
+
+startPage: "${env.url}"
+
+success: |
+  ## rhonometre is installed
+
+  Open the app from the environment URL. The health check is available at `${env.url}healthz`.
+
+  Configure the inbound email provider to forward SIG programme messages to:
+
+  `${env.url}api/admin/email-ingest`
+
+  Use the bearer token entered during installation:
+
+  `Authorization: Bearer <email ingest bearer token>`
+
+  If the application container cannot start, first verify that Jelastic can pull the Docker image and that the PostgreSQL password contains only URL-safe characters.

@@ -61,6 +61,8 @@ const PROGRAMME_PATH_ENV: &str = "RHONOMETRE_PROGRAMME_PATH";
 const PROGRAMME_DIR_ENV: &str = "RHONOMETRE_PROGRAMME_DIR";
 const LOCAL_PROGRAMME_DIR: &str = "data/programmes";
 const DATABASE_URL_ENV: &str = "DATABASE_URL";
+const DATABASE_CONNECT_ATTEMPTS_ENV: &str = "RHONOMETRE_DATABASE_CONNECT_ATTEMPTS";
+const DATABASE_CONNECT_RETRY_SECONDS_ENV: &str = "RHONOMETRE_DATABASE_CONNECT_RETRY_SECONDS";
 const INGEST_TOKEN_ENV: &str = "RHONOMETRE_INGEST_TOKEN";
 const PRO_CODE_ENV: &str = "RHONOMETRE_PRO_CODE";
 const TOKEN_SECRET_ENV: &str = "RHONOMETRE_TOKEN_SECRET";
@@ -478,17 +480,60 @@ async fn init_database() -> Option<PgPool> {
         }
     };
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres DATABASE_URL");
+    let attempts = env::var(DATABASE_CONNECT_ATTEMPTS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(30)
+        .max(1);
+    let retry_delay = Duration::from_secs(
+        env::var(DATABASE_CONNECT_RETRY_SECONDS_ENV)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(2)
+            .max(1),
+    );
 
-    migrate_database(&pool)
-        .await
-        .expect("failed to migrate Postgres schema");
+    for attempt in 1..=attempts {
+        match PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+        {
+            Ok(pool) => match migrate_database(&pool).await {
+                Ok(()) => return Some(pool),
+                Err(err) if attempt == attempts => {
+                    panic!("failed to migrate Postgres schema after {attempts} attempts: {err}");
+                }
+                Err(err) => {
+                    warn!(
+                        attempt,
+                        attempts,
+                        retry_seconds = retry_delay.as_secs(),
+                        error = %err,
+                        "Postgres migration failed; retrying"
+                    );
+                }
+            },
+            Err(err) if attempt == attempts => {
+                panic!(
+                    "failed to connect to Postgres DATABASE_URL after {attempts} attempts: {err}"
+                );
+            }
+            Err(err) => {
+                warn!(
+                    attempt,
+                    attempts,
+                    retry_seconds = retry_delay.as_secs(),
+                    error = %err,
+                    "Postgres connection failed; retrying"
+                );
+            }
+        }
 
-    Some(pool)
+        sleep(retry_delay).await;
+    }
+
+    unreachable!("database connection loop always returns or panics")
 }
 
 async fn migrate_database(db: &PgPool) -> Result<(), sqlx::Error> {
