@@ -2039,16 +2039,20 @@ fn store_pro_token(token: Option<&str>) {
 fn initial_focus_mode() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
-        web_sys::window()
+        match web_sys::window()
             .and_then(|window| window.local_storage().ok().flatten())
             .and_then(|storage| storage.get_item("rhonometre_focus").ok().flatten())
             .as_deref()
-            == Some("1")
+        {
+            Some("0") => false,
+            Some("1") => true,
+            _ => true,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        false
+        true
     }
 }
 
