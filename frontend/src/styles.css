@@ -121,7 +121,7 @@ a {
   align-items: end;
   justify-content: space-between;
   min-width: 0;
-  margin: 16px 18px 0;
+  margin: 4px 18px 0;
 }
 
 .focus-corner-logo {
@@ -509,8 +509,11 @@ a {
 }
 
 .station-current-summary {
+  display: grid;
   align-self: end;
   justify-self: end;
+  justify-items: end;
+  gap: 3px;
   min-width: 0;
   margin: 0;
   color: var(--ink);
@@ -1606,50 +1609,6 @@ a {
     flex-wrap: nowrap;
   }
 
-  .plot-row,
-  .shared-time-axis {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .plot-current-inline {
-    display: none;
-  }
-
-  .plot-current-stacked {
-    display: grid;
-  }
-
-  .axis-spacer {
-    display: none;
-  }
-
-  .plot-current {
-    grid-template-columns: minmax(0, 1fr);
-    justify-items: end;
-    align-content: start;
-    gap: 4px;
-    padding: 9px var(--plot-right-inset) 0 var(--plot-left-inset);
-    text-align: right;
-  }
-
-  .plot-current-heading {
-    justify-items: end;
-    text-align: right;
-  }
-
-  .plot-readout {
-    justify-items: end;
-    text-align: right;
-  }
-
-
-  .plot-last-measure-stacked {
-    display: grid;
-    justify-items: end;
-    margin: -2px calc(var(--plot-right-inset) + var(--chart-pad-x) + 1px) 0
-      calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
-    text-align: right;
-  }
 }
 
 @media (max-width: 760px) {
@@ -1771,6 +1730,46 @@ a {
     height: 230px;
   }
 
+  .plot-row,
+  .shared-time-axis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plot-current-inline {
+    display: none;
+  }
+
+  .plot-current-stacked {
+    display: grid;
+  }
+
+  .axis-spacer {
+    display: none;
+  }
+
+  .plot-current {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: end;
+    align-content: start;
+    gap: 4px;
+    padding: 9px var(--plot-right-inset) 0 var(--plot-left-inset);
+    text-align: right;
+  }
+
+  .plot-current-heading,
+  .plot-readout {
+    justify-items: end;
+    text-align: right;
+  }
+
+  .plot-last-measure-stacked {
+    display: grid;
+    justify-items: end;
+    margin: -2px calc(var(--plot-right-inset) + var(--chart-pad-x) + 1px) 0
+      calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
+    text-align: right;
+  }
+
   .chart-measure-row {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -1822,7 +1821,6 @@ a {
 
   .station-current-summary {
     max-width: 52vw;
-    white-space: normal;
   }
 
   .app-shell.focus-mode .station-focus-title {

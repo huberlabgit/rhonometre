@@ -610,9 +610,8 @@ fn StationPanel(
     let idle_hover_state = latest_station_timestamp(&station)
         .and_then(|timestamp| hover_state_for_timestamp(timestamp, &domain));
     let heading_subtitle = station_metric_context(&station, locale);
-    let measurement_station = station_measurement_station(&station, locale);
     let now = Local::now();
-    let current_summary = current_conditions_summary(
+    let (current_summary_date, current_summary_conditions) = current_conditions_summary(
         &now,
         &live_clock,
         air_temperature
@@ -652,7 +651,10 @@ fn StationPanel(
                     }
                 }
                 if focus_mode {
-                    p { class: "station-current-summary", "{current_summary}" }
+                    p { class: "station-current-summary",
+                        span { "{current_summary_date}" }
+                        span { "{current_summary_conditions}" }
+                    }
                 }
             }
 
@@ -716,10 +718,6 @@ fn StationPanel(
             }
 
             div { class: "station-footnotes",
-                p { class: "station-footnote",
-                    strong { "{tr(locale, \"Station\", \"Station\")}" }
-                    span { "{measurement_station}" }
-                }
                 if let Some(notice) = station_notice {
                     p { class: "station-footnote",
                         strong { "{tr(locale, \"Note\", \"Note\")}" }
@@ -2089,14 +2087,6 @@ fn station_title(station: &StationData, locale: Locale) -> String {
     station_display_text(station, title)
 }
 
-fn station_measurement_station(station: &StationData, locale: Locale) -> String {
-    let station_name = match locale {
-        Locale::Fr => station.name_fr.clone(),
-        Locale::En => station.name_en.clone(),
-    };
-    station_display_text(station, station_name)
-}
-
 fn station_metric_context(station: &StationData, locale: Locale) -> String {
     let title = station_title(station, locale);
     match locale {
@@ -2435,7 +2425,7 @@ fn current_conditions_summary(
     live_clock: &str,
     air_temperature: Option<&CurrentMetric>,
     locale: Locale,
-) -> String {
+) -> (String, String) {
     let weekday = match (locale, now.weekday()) {
         (Locale::Fr, chrono::Weekday::Mon) => "Lundi",
         (Locale::Fr, chrono::Weekday::Tue) => "Mardi",
@@ -2452,30 +2442,31 @@ fn current_conditions_summary(
         (Locale::En, chrono::Weekday::Sat) => "Saturday",
         (Locale::En, chrono::Weekday::Sun) => "Sunday",
     };
-    let date_and_time = format!(
-        "{} {:02}.{:02}.{}, {}",
+    let date = format!(
+        "{} {:02}.{:02}.{}",
         weekday,
         now.day(),
         now.month(),
-        now.year(),
-        live_clock
+        now.year()
     );
 
-    match air_temperature {
+    let conditions = match air_temperature {
         Some(metric) if locale == Locale::Fr => format!(
             "{}, il fait {} {}",
-            date_and_time,
+            live_clock,
             format_metric_number(metric.value, MetricKind::Temperature),
             metric.unit
         ),
         Some(metric) => format!(
             "{}, {} {} outside",
-            date_and_time,
+            live_clock,
             format_metric_number(metric.value, MetricKind::Temperature),
             metric.unit
         ),
-        None => date_and_time,
-    }
+        None => live_clock.to_string(),
+    };
+
+    (date, conditions)
 }
 
 fn format_swiss_now_seconds() -> String {
