@@ -499,8 +499,8 @@ a {
 
 .app-shell.focus-mode .station-heading {
   --station-title-size: clamp(2.25rem, 6.6vw, 4.9rem);
-  justify-items: center;
-  text-align: center;
+  justify-items: start;
+  text-align: left;
 }
 
 .station-heading {
@@ -567,7 +567,7 @@ a {
 .station-focus-title {
   --focus-logo-size: clamp(38px, 4.2vw, 58px);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-direction: column;
   flex-wrap: nowrap;
   gap: 4px;
@@ -1816,7 +1816,7 @@ a {
   }
 
   .app-shell.focus-mode .station-brand-copy {
-    text-align: center;
+    text-align: left;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
