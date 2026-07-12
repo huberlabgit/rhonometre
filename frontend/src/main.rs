@@ -308,6 +308,14 @@ fn App() -> Element {
 
         div { class: "{app_class}",
             if !embed_mode {
+                a {
+                    class: "background-home-link",
+                    href: "https://www.pontonniers-geneve.ch",
+                    aria_label: "Pontonnier·ère·s de Genève",
+                    ""
+                }
+            }
+            if !embed_mode {
                 button {
                     class: "focus-toggle-button icon-button",
                     r#type: "button",
@@ -455,14 +463,16 @@ fn App() -> Element {
 
             if !embed_mode {
                 div { class: "focus-corner-marks",
-                    span {
+                    a {
                         class: "focus-corner-qr",
+                        href: "https://www.pontonniers-geneve.ch",
                         role: "img",
                         aria_label: "QR code Pontonnier·ère·s de Genève",
                         ""
                     }
-                    span {
+                    a {
                         class: "focus-corner-logo",
+                        href: "https://www.pontonniers-geneve.ch",
                         role: "img",
                         aria_label: "Pontonnier·ère·s de Genève",
                         ""
@@ -626,9 +636,17 @@ fn StationPanel(
                 div { class: "station-heading-title",
                     if !embed_mode {
                         h2 { class: "station-focus-title",
-                            span { class: "station-app-word", "{app_title(locale)}" }
+                            a {
+                                class: "station-app-word station-app-link",
+                                href: "https://www.pontonniers-geneve.ch",
+                                "{app_title(locale)}"
+                            }
                             span { class: "station-focus-brand",
-                                span { class: "station-brand-copy", "Pontonnier·ère·s de Genève" }
+                                a {
+                                    class: "station-brand-copy station-brand-link",
+                                    href: "https://www.pontonniers-geneve.ch",
+                                    "Pontonnier·ère·s de Genève"
+                                }
                                 span { class: "partner-logo-icon station-brand-logo", "" }
                             }
                         }
@@ -2037,23 +2055,7 @@ fn store_pro_token(token: Option<&str>) {
 }
 
 fn initial_focus_mode() -> bool {
-    #[cfg(target_arch = "wasm32")]
-    {
-        match web_sys::window()
-            .and_then(|window| window.local_storage().ok().flatten())
-            .and_then(|storage| storage.get_item("rhonometre_focus").ok().flatten())
-            .as_deref()
-        {
-            Some("0") => false,
-            Some("1") => true,
-            _ => true,
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        true
-    }
+    true
 }
 
 fn store_focus_mode(enabled: bool) {

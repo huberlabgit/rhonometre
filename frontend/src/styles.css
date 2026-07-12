@@ -73,11 +73,28 @@ a {
 }
 
 .app-shell {
+  position: relative;
+  isolation: isolate;
   width: calc(100% - 20px);
   max-width: 1240px;
   margin: 0 auto;
   padding: 16px 0 36px;
   min-width: 0;
+}
+
+.background-home-link {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  cursor: pointer;
+}
+
+.topbar,
+.dashboard,
+.focus-corner-marks {
+  position: relative;
+  z-index: 1;
 }
 
 .app-shell.focus-mode {
@@ -110,10 +127,10 @@ a {
 }
 
 .app-shell.focus-mode .focus-toggle-button {
-  top: 12px;
-  right: auto;
-  bottom: auto;
-  left: 12px;
+  top: auto;
+  right: 12px;
+  bottom: 12px;
+  left: auto;
 }
 
 .focus-corner-marks {
@@ -340,6 +357,16 @@ a {
   width: 100%;
   min-width: 0;
   margin-inline: auto;
+  pointer-events: none;
+}
+
+.station-heading,
+.chart-stack,
+.station-tabs,
+.source-strip,
+.notice,
+.station-footnotes {
+  pointer-events: auto;
 }
 
 .dashboard-focus {
@@ -605,6 +632,16 @@ a {
   max-width: 100%;
   min-width: 0;
   width: 100%;
+}
+
+.station-app-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.station-brand-link {
+  color: inherit;
+  text-decoration: none;
 }
 
 .station-embed-title {
