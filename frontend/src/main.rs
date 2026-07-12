@@ -40,7 +40,6 @@ struct DashboardData {
     #[serde(default)]
     sources: Vec<SourceInfo>,
     #[serde(default)]
-    air_temperature: Option<AirTemperatureData>,
     stations: Vec<StationData>,
     warnings: Vec<String>,
 }
@@ -331,6 +330,12 @@ fn App() -> Element {
                     aria_label: "Pontonnier·ère·s de Genève",
                     ""
                 }
+                span {
+                    class: "focus-corner-qr",
+                    role: "img",
+                    aria_label: "QR code Pontonnier·ère·s de Genève",
+                    ""
+                }
             }
 
             if !embed_mode {
@@ -485,13 +490,6 @@ fn DashboardView(
         .find(|station| station_matches(station, &selected_station()))
         .or_else(|| river_stations.first())
         .cloned();
-    let air_temperature = data.air_temperature.clone();
-    let air_temperature_label = data
-        .air_temperature
-        .as_ref()
-        .and_then(|air| air.current.as_ref())
-        .map(|metric| format_metric_value(metric.value, &metric.unit, MetricKind::Temperature));
-
     rsx! {
         div { class: if focus_mode { "dashboard dashboard-focus" } else if embed_mode { "dashboard dashboard-embed" } else { "dashboard" },
             if let Some(station) = selected {
@@ -501,8 +499,6 @@ fn DashboardView(
                     focus_mode,
                     embed_mode,
                     pro_enabled,
-                    air_temperature: air_temperature.clone(),
-                    air_temperature_label: air_temperature_label.clone(),
                     live_clock: live_clock.clone(),
                 }
             }
@@ -566,7 +562,6 @@ fn StationPanel(
     embed_mode: bool,
     pro_enabled: bool,
     air_temperature: Option<AirTemperatureData>,
-    air_temperature_label: Option<String>,
     live_clock: String,
 ) -> Element {
     let hover_state = use_signal(|| None::<HoverState>);
@@ -580,11 +575,6 @@ fn StationPanel(
     let temperature_history = series_for_kind(&station.history, MetricKind::Temperature);
     let temperature_forecast = if pro_enabled {
         series_for_kind(&station.forecast, MetricKind::Temperature)
-    } else {
-        None
-    };
-    let air_temperature_overlay = if pro_enabled {
-        air_temperature.as_ref().map(|air| &air.history)
     } else {
         None
     };
@@ -607,7 +597,7 @@ fn StationPanel(
         .or_else(|| {
             latest_measurement.clone().map(|timestamp| {
                 (
-                    tr(locale, "Dernière mesure", "Latest measurement").to_string(),
+                    tr(locale, "Dernière mesure:", "Latest measurement:").to_string(),
                     timestamp,
                 )
             })
@@ -625,13 +615,7 @@ fn StationPanel(
                         h2 { class: "station-focus-title",
                             span { class: "station-app-word", "{app_title(locale)}" }
                             span { class: "station-focus-brand",
-                                span { class: "station-brand-copy",
-                                    "des"
-                                    br {}
-                                    "Pontonnier·ère·s"
-                                    br {}
-                                    "de Genève"
-                                }
+                                span { class: "station-brand-copy", "Pontonnier·ère·s de Genève" }
                                 span { class: "partner-logo-icon station-brand-logo", "" }
                             }
                         }
@@ -653,24 +637,6 @@ fn StationPanel(
                         h2 { "{station_title(&station, locale)}" }
                     }
                 }
-                div { class: "station-heading-side",
-                    div { class: "page-live-clock station-live-clock",
-                        span { class: "live-clock-label", "{tr(locale, \"Maintenant\", \"Now\")}" }
-                        time { class: "live-clock-time", "{live_clock}" }
-                        if let Some(air_temperature_label) = air_temperature_label {
-                            span { class: "live-clock-air",
-                                span { "{tr(locale, \"Air\", \"Air\")}" }
-                                strong { "{air_temperature_label}" }
-                            }
-                        }
-                    }
-                    span {
-                        class: "station-header-qr",
-                        role: "img",
-                        aria_label: "QR code Pontonnier·ère·s de Genève",
-                        ""
-                    }
-                }
             }
 
             div { class: "chart-stack",
@@ -687,8 +653,10 @@ fn StationPanel(
                     &domain,
                     locale,
                     hover_state,
-                    air_temperature_overlay,
+                    None,
                     idle_hover_state,
+                    Some(live_clock.clone()),
+                    None,
                 )}
 
                 {metric_readout(
@@ -699,6 +667,7 @@ fn StationPanel(
                     &domain,
                     locale,
                     hover_state,
+                    Some(live_clock.clone()),
                     None,
                     "plot-current plot-current-stacked",
                 )}
@@ -714,6 +683,8 @@ fn StationPanel(
                     hover_state,
                     None,
                     idle_hover_state,
+                    None,
+                    measurement_readout.clone(),
                 )}
 
                 {metric_readout(
@@ -725,17 +696,10 @@ fn StationPanel(
                     locale,
                     hover_state,
                     None,
+                    measurement_readout.clone(),
                     "plot-current plot-current-stacked",
                 )}
 
-                if let Some((measurement_label, measurement_time)) = measurement_readout {
-                    div { class: "chart-measure-footer",
-                        p { class: "plot-last-measure plot-last-measure-chart",
-                            span { "{measurement_label}" }
-                            time { "{measurement_time}" }
-                        }
-                    }
-                }
             }
 
             div { class: "station-footnotes",
@@ -843,6 +807,8 @@ fn metric_chart(
     mut hover_state: Signal<Option<HoverState>>,
     air_overlay: Option<&MetricSeries>,
     idle_hover_state: Option<HoverState>,
+    live_time: Option<String>,
+    measurement_readout: Option<(String, String)>,
 ) -> Element {
     let history_points = history
         .map(|series| timed_points(&series.points))
@@ -1096,7 +1062,8 @@ fn metric_chart(
                     domain,
                     locale,
                     hover_state,
-                    None,
+                    live_time,
+                    measurement_readout,
                     "plot-current plot-current-inline",
                 )}
             }
@@ -1121,6 +1088,7 @@ fn metric_readout(
     domain: &TimeDomain,
     locale: Locale,
     hover_state: Signal<Option<HoverState>>,
+    live_time: Option<String>,
     measurement_readout: Option<(String, String)>,
     class_name: &str,
 ) -> Element {
@@ -1171,6 +1139,9 @@ fn metric_readout(
     rsx! {
         div { class: "{class_name}",
             div { class: "plot-current-heading",
+                if let Some(live_time) = live_time {
+                    time { class: "readout-live-time", "{live_time}" }
+                }
                 h3 { "{metric_title(kind, locale)}" }
             }
             div { class: "plot-readout",
@@ -2424,14 +2395,6 @@ fn safety_label(safety: DischargeSafety, locale: Locale) -> &'static str {
         (DischargeSafety::Risky, Locale::En) => "Strong current",
         (DischargeSafety::NoSwim, Locale::Fr) => "Danger! Courant très fort!",
         (DischargeSafety::NoSwim, Locale::En) => "Danger! Very strong current!",
-    }
-}
-
-fn format_metric_value(value: f64, unit: &str, kind: MetricKind) -> String {
-    match kind {
-        MetricKind::Temperature => format!("{value:.1} {unit}"),
-        MetricKind::Discharge => format!("{value:.0} {unit}"),
-        MetricKind::WaterLevel => format!("{value:.2} {unit}"),
     }
 }
 

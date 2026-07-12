@@ -23,16 +23,16 @@
   --plot-grid-line: rgba(97, 112, 106, 0.15);
   --plot-midnight-line: rgba(23, 33, 29, 0.48);
   --plot-cursor-line: rgba(23, 33, 29, 0.52);
-  --type-xs: 0.75rem;
-  --type-sm: 0.875rem;
-  --type-md: 1rem;
+  --type-xs: 0.9rem;
+  --type-sm: 1rem;
+  --type-md: 1.125rem;
   --type-lg: 1.125rem;
-  --time-label-size: 0.875rem;
-  --axis-label-size: 1.125rem;
-  --font-ui: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", ui-sans-serif, system-ui,
-    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-brand: "Hanken Grotesk", var(--font-ui);
-  --font-number: Inter, var(--font-ui);
+  --time-label-size: 1rem;
+  --axis-label-size: 1.2rem;
+  --chart-label-size: 1rem;
+  --font-ui: Calibri, Carlito, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-brand: var(--font-ui);
+  --font-number: var(--font-ui);
   font-family:
     var(--font-ui);
 }
@@ -110,7 +110,9 @@ a {
 }
 
 .app-shell.focus-mode .focus-toggle-button {
+  top: 12px;
   right: auto;
+  bottom: auto;
   left: 12px;
 }
 
@@ -123,6 +125,21 @@ a {
   width: clamp(72px, 8vw, 118px);
   aspect-ratio: 1135 / 1179;
   background-image: url("/public/Logo_Pontonniers_Round_White.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  pointer-events: none;
+}
+
+.focus-corner-qr {
+  position: fixed;
+  bottom: clamp(12px, 2vw, 24px);
+  left: clamp(12px, 2vw, 24px);
+  z-index: 12;
+  display: block;
+  width: clamp(72px, 8vw, 118px);
+  aspect-ratio: 1;
+  background-image: url("/public/pontonniers-geneve-qr.svg");
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
@@ -476,6 +493,16 @@ a {
   display: none;
 }
 
+.app-shell.focus-mode {
+  --station-attribution-size: clamp(1rem, 3vw, 2.2rem);
+}
+
+.app-shell.focus-mode .station-heading {
+  --station-title-size: clamp(2.25rem, 6.6vw, 4.9rem);
+  justify-items: center;
+  text-align: center;
+}
+
 .station-heading {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -504,26 +531,31 @@ a {
 
 .station-focus-brand {
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
+  align-self: stretch;
   flex: 0 1 auto;
   gap: clamp(14px, 1.7vw, 24px);
   max-width: 100%;
   min-width: 0;
   color: var(--muted);
   font-family: var(--font-brand);
-  font-size: clamp(0.7rem, 1.2vw, 0.86rem);
+  font-size: var(--station-attribution-size);
   font-weight: 850;
-  line-height: 1.05;
+  line-height: 1;
 }
 
 .station-brand-copy {
+  display: flex;
   flex: 0 1 auto;
+  flex-direction: column;
+  justify-content: space-between;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
   text-align: left;
 }
+
 
 .app-shell.focus-mode .station-focus-brand,
 .app-shell.focus-mode .station-focus-brand .station-brand-copy,
@@ -535,9 +567,10 @@ a {
 .station-focus-title {
   --focus-logo-size: clamp(38px, 4.2vw, 58px);
   display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 8px 10px;
+  align-items: center;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 4px;
   max-width: 100%;
   min-width: 0;
   width: 100%;
@@ -559,8 +592,8 @@ a {
   align-items: center;
   flex: 0 0 auto;
   font-family: var(--font-brand);
-  font-size: clamp(2.25rem, 6.6vw, 4.9rem);
-  line-height: 0.82;
+  font-size: var(--station-title-size);
+  line-height: 1;
 }
 
 .station-embed-brand {
@@ -600,9 +633,8 @@ a {
 }
 
 .station-heading-side {
-  --station-header-qr-size: clamp(44px, 4.8vw, 62px);
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   justify-content: flex-end;
   gap: 12px;
   min-width: 0;
@@ -637,9 +669,17 @@ a {
 }
 
 .station-live-clock {
+  align-self: start;
   justify-items: end;
   min-width: 0;
   text-align: right;
+}
+
+.app-shell.focus-mode .station-live-clock .live-clock-time {
+  display: block;
+  font-family: var(--font-brand);
+  font-size: clamp(2.35rem, 6.4vw, 3.95rem);
+  line-height: 1;
 }
 
 .live-clock-label {
@@ -734,6 +774,7 @@ a {
   background: #ffffff;
 }
 
+
 .app-shell.embed-mode .chart-stack {
   border-radius: 0;
 }
@@ -747,10 +788,18 @@ a {
     calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
 }
 
+.app-shell.focus-mode .chart-measure-row {
+  justify-items: center;
+  padding-bottom: 16px;
+  padding-right: var(--chart-pad-x);
+  padding-left: var(--chart-pad-x);
+  text-align: center;
+}
+
 .chart-measure-footer {
   display: grid;
   align-items: end;
-  justify-items: end;
+  justify-items: start;
   min-width: 0;
   padding: 0 calc(var(--chart-pad-x) + 6px) 8px
     calc(var(--plot-left-inset) + var(--chart-pad-x) + 1px);
@@ -766,9 +815,10 @@ a {
 }
 
 .app-shell.focus-mode .chart-context-label {
-  font-size: var(--type-lg);
-  font-weight: 900;
-  line-height: 1.12;
+  font-family: var(--font-brand);
+  font-size: var(--station-attribution-size);
+  font-weight: 850;
+  line-height: 1;
 }
 
 .chart-card {
@@ -795,7 +845,7 @@ a {
   --metric-axis: var(--metric-line);
   --metric-fill: #1f9fc4;
   --metric-grid: rgba(37, 99, 235, 0.14);
-  padding-bottom: calc(var(--chart-pad-y) + 4px);
+  padding-bottom: calc(var(--chart-pad-y) + 14px);
 }
 
 .plot-row {
@@ -1116,6 +1166,7 @@ a {
 
 .plot-current {
   display: grid;
+  font-family: var(--font-brand);
   align-content: center;
   align-items: center;
   gap: 10px;
@@ -1130,11 +1181,13 @@ a {
 
 .plot-current-heading {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   min-width: 0;
 }
 
-.plot-current-heading h3 {
+.plot-current-heading h3,
+.plot-current-heading .readout-live-time {
+  font-family: var(--font-brand);
   margin: 0;
   color: var(--muted);
   font-size: var(--axis-label-size);
@@ -1159,7 +1212,7 @@ a {
   display: inline-flex;
   align-items: baseline;
   gap: 0.16em;
-  font-family: var(--font-number);
+  font-family: var(--font-brand);
   font-size: clamp(2.35rem, 6.4vw, 3.95rem);
   line-height: 1;
   overflow-wrap: normal;
@@ -1167,9 +1220,10 @@ a {
   word-break: normal;
 }
 
+
 .metric-number,
 .metric-unit {
-  font-family: var(--font-number);
+  font-family: var(--font-brand);
 }
 
 .readout-value.temperature {
@@ -1189,6 +1243,7 @@ a {
 }
 
 .discharge-comment {
+  font-family: var(--font-brand);
   font-size: var(--type-md);
   font-weight: 850;
   letter-spacing: 0;
@@ -1234,13 +1289,57 @@ a {
 }
 
 .plot-last-measure-chart {
-  justify-items: end;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
   margin: 0;
-  text-align: right;
+  color: var(--muted);
+  font-family: var(--font-number);
+  font-size: var(--time-label-size);
+  font-weight: 650;
+  line-height: 1.15;
+  opacity: 0.9;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.plot-last-measure-chart span,
+.plot-last-measure-chart time {
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  opacity: 1;
+  text-transform: none;
 }
 
 .plot-last-measure-stacked {
   display: none;
+}
+
+.plot-last-measure-inline {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: var(--font-brand);
+  font-size: var(--axis-label-size);
+  font-weight: 850;
+  line-height: 1.15;
+  opacity: 0.95;
+  white-space: nowrap;
+}
+
+.plot-last-measure-inline span,
+.plot-last-measure-inline time {
+  color: inherit;
+  font-family: var(--font-brand);
+  opacity: 1;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  text-transform: none;
 }
 
 .shared-time-axis {
@@ -1523,9 +1622,6 @@ a {
     text-align: right;
   }
 
-  .plot-last-measure-inline {
-    display: none;
-  }
 
   .plot-last-measure-stacked {
     display: grid;
@@ -1614,6 +1710,10 @@ a {
     font-size: clamp(1.8rem, 8.4vw, 2.85rem);
   }
 
+  .app-shell.focus-mode .station-live-clock .live-clock-time {
+    font-size: clamp(1.8rem, 8.4vw, 2.85rem);
+  }
+
   .app-shell.focus-mode .station-focus-title {
     --focus-logo-size: clamp(36px, 6vw, 52px);
   }
@@ -1685,25 +1785,38 @@ a {
     padding: 0;
   }
 
+  .app-shell.focus-mode .chart-measure-row {
+    padding-right: 0;
+    padding-left: 0;
+    padding-bottom: 16px;
+  }
+
+  .app-shell.focus-mode {
+    --station-attribution-size: clamp(0.68rem, 3.6vw, 1.08rem);
+  }
+
+  .app-shell.focus-mode .station-heading {
+    --station-title-size: clamp(1.65rem, 9.7vw, 2.85rem);
+  }
+
   .app-shell.focus-mode .station-focus-title {
     --focus-logo-size: clamp(34px, 10vw, 48px);
     gap: 6px;
     width: 100%;
   }
 
-  .app-shell.focus-mode .station-app-word {
-    font-size: clamp(1.65rem, 9.7vw, 2.85rem);
-  }
 
   .app-shell.focus-mode .station-focus-brand {
     gap: 5px;
     flex: 1 1 auto;
+    align-self: auto;
     width: auto;
     overflow: visible;
-    font-size: clamp(0.43rem, 1.65vw, 0.56rem);
+    font-size: var(--station-attribution-size);
   }
 
   .app-shell.focus-mode .station-brand-copy {
+    text-align: center;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1712,7 +1825,6 @@ a {
 
   .app-shell.focus-mode .station-live-clock {
     justify-self: end;
-    margin-top: -2px;
   }
 
   .custom-y-axis-title {
@@ -1749,6 +1861,10 @@ a {
     font-size: clamp(1.62rem, 8.8vw, 2.45rem);
   }
 
+  .app-shell.focus-mode .station-live-clock .live-clock-time {
+    font-size: clamp(1.62rem, 8.8vw, 2.45rem);
+  }
+
   .discharge-comment {
     max-width: 120px;
     text-align: right;
@@ -1756,12 +1872,10 @@ a {
 }
 
 @media (max-width: 480px) {
-  .app-shell.focus-mode .station-heading,
   .app-shell.embed-mode .station-heading {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .app-shell.focus-mode .station-heading-side,
   .app-shell.embed-mode .station-heading-side {
     justify-self: end;
   }
@@ -1791,4 +1905,16 @@ a {
   .axis-label {
     width: 16px;
   }
+}
+
+.custom-y-axis-title,
+.custom-y-tick,
+.plot-current-heading h3,
+.plot-current-heading .readout-live-time,
+.plot-last-measure-chart,
+.plot-last-measure-inline,
+.axis-label,
+.axis-label.noon {
+  color: var(--muted);
+  opacity: 1;
 }

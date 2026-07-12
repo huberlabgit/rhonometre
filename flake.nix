@@ -93,6 +93,7 @@
         pkgs.writeShellApplication {
           name = "rhonometre";
           runtimeInputs = [
+            pkgs.stdenv.cc
             rustToolchain
             pkgs.pkg-config
             pkgs.openssl
