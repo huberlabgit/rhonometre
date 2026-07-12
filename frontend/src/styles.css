@@ -83,6 +83,7 @@ a {
 .app-shell.focus-mode {
   width: calc(100% - 16px);
   max-width: 1480px;
+  --focus-chart-edge: max(26px, calc((100vw - 1480px) / 2 + 18px));
   padding: 8px 0 20px;
 }
 
@@ -118,7 +119,7 @@ a {
 
 .focus-corner-logo {
   position: fixed;
-  right: clamp(12px, 2vw, 24px);
+  right: var(--focus-chart-edge);
   bottom: clamp(12px, 2vw, 24px);
   z-index: 12;
   display: block;
@@ -134,7 +135,7 @@ a {
 .focus-corner-qr {
   position: fixed;
   bottom: clamp(12px, 2vw, 24px);
-  left: clamp(12px, 2vw, 24px);
+  left: var(--focus-chart-edge);
   z-index: 12;
   display: block;
   width: clamp(72px, 8vw, 118px);
