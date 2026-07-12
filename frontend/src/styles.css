@@ -12,11 +12,11 @@
   --red: #b42318;
   --green: #2f7d46;
   --shadow: 0 14px 45px rgba(25, 38, 34, 0.10);
-  --plot-left-inset: 56px;
-  --plot-right-inset: 56px;
+  --plot-left-inset: 64px;
+  --plot-right-inset: 64px;
   --plot-y-pad: 9px;
-  --chart-pad-y: 10px;
-  --chart-pad-x: 10px;
+  --chart-pad-y: 16px;
+  --chart-pad-x: 16px;
   --chart-gap: 10px;
   --value-column-width: minmax(196px, 264px);
   --chart-content-min-width: 100%;
@@ -83,7 +83,6 @@ a {
 .app-shell.focus-mode {
   width: calc(100% - 16px);
   max-width: 1480px;
-  --focus-chart-edge: max(26px, calc((100vw - 1480px) / 2 + 18px));
   padding: 8px 0 20px;
 }
 
@@ -117,10 +116,16 @@ a {
   left: 12px;
 }
 
+.focus-corner-marks {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  min-width: 0;
+  margin: 16px 18px 0;
+}
+
 .focus-corner-logo {
-  position: fixed;
-  right: var(--focus-chart-edge);
-  bottom: clamp(12px, 2vw, 24px);
+  position: static;
   z-index: 12;
   display: block;
   width: clamp(72px, 8vw, 118px);
@@ -133,9 +138,7 @@ a {
 }
 
 .focus-corner-qr {
-  position: fixed;
-  bottom: clamp(12px, 2vw, 24px);
-  left: var(--focus-chart-edge);
+  position: static;
   z-index: 12;
   display: block;
   width: clamp(72px, 8vw, 118px);
@@ -500,8 +503,23 @@ a {
 
 .app-shell.focus-mode .station-heading {
   --station-title-size: clamp(2.25rem, 6.6vw, 4.9rem);
+  align-items: end;
   justify-items: start;
   text-align: left;
+}
+
+.station-current-summary {
+  align-self: end;
+  justify-self: end;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-brand);
+  font-size: var(--station-attribution-size);
+  font-weight: 850;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .station-heading {
@@ -839,6 +857,7 @@ a {
   --metric-axis: var(--red);
   --metric-line: #dc2626;
   --metric-grid: rgba(180, 35, 24, 0.16);
+  padding-top: calc(var(--chart-pad-y) + 26px);
 }
 
 .chart-card.discharge {
@@ -846,7 +865,7 @@ a {
   --metric-axis: var(--metric-line);
   --metric-fill: #1f9fc4;
   --metric-grid: rgba(37, 99, 235, 0.14);
-  padding-bottom: calc(var(--chart-pad-y) + 14px);
+  padding-bottom: calc(var(--chart-pad-y) + 34px);
 }
 
 .plot-row {
@@ -1358,12 +1377,12 @@ a {
 }
 
 .time-axis-top {
-  top: 0;
+  top: 10px;
   margin: 0;
 }
 
 .time-axis-bottom {
-  bottom: 0;
+  bottom: 10px;
   margin: 0;
 }
 
@@ -1722,11 +1741,11 @@ a {
 
 @media (max-width: 640px) {
   :root {
-    --plot-left-inset: 46px;
-    --plot-right-inset: 40px;
+    --plot-left-inset: 54px;
+    --plot-right-inset: 54px;
     --plot-y-pad: 10px;
-    --chart-pad-y: 8px;
-    --chart-pad-x: 5px;
+    --chart-pad-y: 12px;
+    --chart-pad-x: 10px;
     --chart-gap: 7px;
     --value-column-width: minmax(94px, 26vw);
     --chart-content-min-width: 150px;
@@ -1798,6 +1817,12 @@ a {
 
   .app-shell.focus-mode .station-heading {
     --station-title-size: clamp(1.65rem, 9.7vw, 2.85rem);
+    column-gap: 10px;
+  }
+
+  .station-current-summary {
+    max-width: 52vw;
+    white-space: normal;
   }
 
   .app-shell.focus-mode .station-focus-title {
@@ -1884,8 +1909,8 @@ a {
 
 @media (max-width: 420px) {
   :root {
-    --plot-left-inset: 42px;
-    --plot-right-inset: 36px;
+    --plot-left-inset: 50px;
+    --plot-right-inset: 50px;
     --value-column-width: minmax(88px, 25vw);
   }
 

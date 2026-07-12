@@ -41,6 +41,8 @@ struct DashboardData {
     sources: Vec<SourceInfo>,
     #[serde(default)]
     stations: Vec<StationData>,
+    #[serde(default)]
+    air_temperature: Option<AirTemperatureData>,
     warnings: Vec<String>,
 }
 
@@ -323,21 +325,6 @@ fn App() -> Element {
                 }
             }
 
-            if focus_mode() && !embed_mode {
-                span {
-                    class: "focus-corner-logo",
-                    role: "img",
-                    aria_label: "Pontonnier·ère·s de Genève",
-                    ""
-                }
-                span {
-                    class: "focus-corner-qr",
-                    role: "img",
-                    aria_label: "QR code Pontonnier·ère·s de Genève",
-                    ""
-                }
-            }
-
             if !embed_mode {
                 div { class: "topbar",
                     div { class: "brand-lockup",
@@ -465,6 +452,23 @@ fn App() -> Element {
                     }
                 },
             }
+
+            if focus_mode() && !embed_mode {
+                div { class: "focus-corner-marks",
+                    span {
+                        class: "focus-corner-qr",
+                        role: "img",
+                        aria_label: "QR code Pontonnier·ère·s de Genève",
+                        ""
+                    }
+                    span {
+                        class: "focus-corner-logo",
+                        role: "img",
+                        aria_label: "Pontonnier·ère·s de Genève",
+                        ""
+                    }
+                }
+            }
         }
     }
 }
@@ -499,6 +503,7 @@ fn DashboardView(
                     focus_mode,
                     embed_mode,
                     pro_enabled,
+                    air_temperature: data.air_temperature.clone(),
                     live_clock: live_clock.clone(),
                 }
             }
@@ -606,6 +611,15 @@ fn StationPanel(
         .and_then(|timestamp| hover_state_for_timestamp(timestamp, &domain));
     let heading_subtitle = station_metric_context(&station, locale);
     let measurement_station = station_measurement_station(&station, locale);
+    let now = Local::now();
+    let current_summary = current_conditions_summary(
+        &now,
+        &live_clock,
+        air_temperature
+            .as_ref()
+            .and_then(|air| air.current.as_ref()),
+        locale,
+    );
 
     rsx! {
         article { class: "station-panel",
@@ -637,6 +651,9 @@ fn StationPanel(
                         h2 { "{station_title(&station, locale)}" }
                     }
                 }
+                if focus_mode {
+                    p { class: "station-current-summary", "{current_summary}" }
+                }
             }
 
             div { class: "chart-stack",
@@ -655,7 +672,6 @@ fn StationPanel(
                     hover_state,
                     None,
                     idle_hover_state,
-                    Some(live_clock.clone()),
                     None,
                 )}
 
@@ -667,7 +683,6 @@ fn StationPanel(
                     &domain,
                     locale,
                     hover_state,
-                    Some(live_clock.clone()),
                     None,
                     "plot-current plot-current-stacked",
                 )}
@@ -683,7 +698,6 @@ fn StationPanel(
                     hover_state,
                     None,
                     idle_hover_state,
-                    None,
                     measurement_readout.clone(),
                 )}
 
@@ -695,7 +709,6 @@ fn StationPanel(
                     &domain,
                     locale,
                     hover_state,
-                    None,
                     measurement_readout.clone(),
                     "plot-current plot-current-stacked",
                 )}
@@ -807,7 +820,6 @@ fn metric_chart(
     mut hover_state: Signal<Option<HoverState>>,
     air_overlay: Option<&MetricSeries>,
     idle_hover_state: Option<HoverState>,
-    live_time: Option<String>,
     measurement_readout: Option<(String, String)>,
 ) -> Element {
     let history_points = history
@@ -1062,7 +1074,6 @@ fn metric_chart(
                     domain,
                     locale,
                     hover_state,
-                    live_time,
                     measurement_readout,
                     "plot-current plot-current-inline",
                 )}
@@ -1088,7 +1099,6 @@ fn metric_readout(
     domain: &TimeDomain,
     locale: Locale,
     hover_state: Signal<Option<HoverState>>,
-    live_time: Option<String>,
     measurement_readout: Option<(String, String)>,
     class_name: &str,
 ) -> Element {
@@ -1135,13 +1145,9 @@ fn metric_readout(
             )
         })
         .unwrap_or_else(|| format!("readout-value {}", metric_kind_class(kind)));
-
     rsx! {
         div { class: "{class_name}",
             div { class: "plot-current-heading",
-                if let Some(live_time) = live_time {
-                    time { class: "readout-live-time", "{live_time}" }
-                }
                 h3 { "{metric_title(kind, locale)}" }
             }
             div { class: "plot-readout",
@@ -2422,6 +2428,54 @@ fn format_timestamp_from_seconds(seconds: f64, locale: Locale) -> String {
     DateTime::<Utc>::from_timestamp(seconds as i64, 0)
         .map(|timestamp| format_timestamp(&timestamp.to_rfc3339(), locale))
         .unwrap_or_else(|| "—".to_string())
+}
+
+fn current_conditions_summary(
+    now: &DateTime<Local>,
+    live_clock: &str,
+    air_temperature: Option<&CurrentMetric>,
+    locale: Locale,
+) -> String {
+    let weekday = match (locale, now.weekday()) {
+        (Locale::Fr, chrono::Weekday::Mon) => "Lundi",
+        (Locale::Fr, chrono::Weekday::Tue) => "Mardi",
+        (Locale::Fr, chrono::Weekday::Wed) => "Mercredi",
+        (Locale::Fr, chrono::Weekday::Thu) => "Jeudi",
+        (Locale::Fr, chrono::Weekday::Fri) => "Vendredi",
+        (Locale::Fr, chrono::Weekday::Sat) => "Samedi",
+        (Locale::Fr, chrono::Weekday::Sun) => "Dimanche",
+        (Locale::En, chrono::Weekday::Mon) => "Monday",
+        (Locale::En, chrono::Weekday::Tue) => "Tuesday",
+        (Locale::En, chrono::Weekday::Wed) => "Wednesday",
+        (Locale::En, chrono::Weekday::Thu) => "Thursday",
+        (Locale::En, chrono::Weekday::Fri) => "Friday",
+        (Locale::En, chrono::Weekday::Sat) => "Saturday",
+        (Locale::En, chrono::Weekday::Sun) => "Sunday",
+    };
+    let date_and_time = format!(
+        "{} {:02}.{:02}.{}, {}",
+        weekday,
+        now.day(),
+        now.month(),
+        now.year(),
+        live_clock
+    );
+
+    match air_temperature {
+        Some(metric) if locale == Locale::Fr => format!(
+            "{}, il fait {} {}",
+            date_and_time,
+            format_metric_number(metric.value, MetricKind::Temperature),
+            metric.unit
+        ),
+        Some(metric) => format!(
+            "{}, {} {} outside",
+            date_and_time,
+            format_metric_number(metric.value, MetricKind::Temperature),
+            metric.unit
+        ),
+        None => date_and_time,
+    }
 }
 
 fn format_swiss_now_seconds() -> String {
