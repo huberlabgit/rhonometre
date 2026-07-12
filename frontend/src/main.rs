@@ -298,9 +298,9 @@ fn App() -> Element {
     let app_class = if embed_mode {
         "app-shell embed-mode"
     } else if focus_mode() {
-        "app-shell focus-mode"
+        "app-shell branded-mode focus-mode"
     } else {
-        "app-shell"
+        "app-shell branded-mode"
     };
 
     rsx! {
@@ -453,7 +453,7 @@ fn App() -> Element {
                 },
             }
 
-            if focus_mode() && !embed_mode {
+            if !embed_mode {
                 div { class: "focus-corner-marks",
                     span {
                         class: "focus-corner-qr",
@@ -624,7 +624,7 @@ fn StationPanel(
         article { class: "station-panel",
             div { class: "station-heading",
                 div { class: "station-heading-title",
-                    if focus_mode {
+                    if !embed_mode {
                         h2 { class: "station-focus-title",
                             span { class: "station-app-word", "{app_title(locale)}" }
                             span { class: "station-focus-brand",
@@ -650,7 +650,7 @@ fn StationPanel(
                         h2 { "{station_title(&station, locale)}" }
                     }
                 }
-                if focus_mode {
+                if !embed_mode {
                     p { class: "station-current-summary",
                         span { "{current_summary_date}" }
                         span { "{current_summary_conditions}" }
@@ -1146,7 +1146,7 @@ fn metric_readout(
     rsx! {
         div { class: "{class_name}",
             div { class: "plot-current-heading",
-                h3 { "{metric_title(kind, locale)}" }
+                h3 { "{current_metric_title(kind, locale)}" }
             }
             div { class: "plot-readout",
                 {metric_value(readout_class, formatted_value, unit.clone(), kind)}
@@ -2133,6 +2133,17 @@ fn metric_title(kind: MetricKind, locale: Locale) -> &'static str {
     }
 }
 
+fn current_metric_title(kind: MetricKind, locale: Locale) -> &'static str {
+    match (kind, locale) {
+        (MetricKind::Discharge, Locale::Fr) => "Débit actuel",
+        (MetricKind::Discharge, Locale::En) => "Current discharge",
+        (MetricKind::Temperature, Locale::Fr) => "Température actuelle",
+        (MetricKind::Temperature, Locale::En) => "Current temperature",
+        (MetricKind::WaterLevel, Locale::Fr) => "Niveau actuel",
+        (MetricKind::WaterLevel, Locale::En) => "Current water level",
+    }
+}
+
 fn default_unit(kind: MetricKind) -> &'static str {
     match kind {
         MetricKind::Discharge => "m³/s",
@@ -2182,18 +2193,27 @@ fn axis_label_wide(tick: &AxisTick, locale: Locale) -> String {
     }
 }
 
-fn axis_label_medium(tick: &AxisTick, locale: Locale) -> String {
+fn axis_label_medium(tick: &AxisTick, _locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Noon => date_label_compact(tick.timestamp, locale, false),
+        AxisTickKind::Noon => date_label_numeric(tick.timestamp),
         _ => String::new(),
     }
 }
 
-fn axis_label_short(tick: &AxisTick, locale: Locale) -> String {
+fn axis_label_short(tick: &AxisTick, _locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Noon => date_label_compact(tick.timestamp, locale, true),
+        AxisTickKind::Noon => date_label_numeric(tick.timestamp),
         _ => String::new(),
     }
+}
+
+fn date_label_numeric(timestamp: f64) -> String {
+    DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+        .map(|datetime| {
+            let local = datetime.with_timezone(&Local);
+            format!("{}.{}.", local.day(), local.month())
+        })
+        .unwrap_or_default()
 }
 
 fn date_label_full(timestamp: f64, locale: Locale) -> String {
@@ -2214,40 +2234,6 @@ fn date_label_full(timestamp: f64, locale: Locale) -> String {
             month_name_en(local.month()),
             local.day()
         ),
-    }
-}
-
-fn date_label_compact(timestamp: f64, locale: Locale, short_weekday: bool) -> String {
-    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp as i64, 0) else {
-        return String::new();
-    };
-    let weekday = if short_weekday {
-        weekday_short_label(timestamp, locale)
-    } else {
-        weekday_medium_label(timestamp, locale)
-    };
-    format!("{} {}", weekday, datetime.with_timezone(&Local).day())
-}
-
-fn weekday_short_label(timestamp: f64, locale: Locale) -> &'static str {
-    let Some(datetime) = DateTime::<Utc>::from_timestamp(timestamp as i64, 0) else {
-        return "";
-    };
-    match (locale, datetime.with_timezone(&Local).weekday()) {
-        (Locale::Fr, chrono::Weekday::Mon) => "L",
-        (Locale::Fr, chrono::Weekday::Tue) => "Ma",
-        (Locale::Fr, chrono::Weekday::Wed) => "Me",
-        (Locale::Fr, chrono::Weekday::Thu) => "J",
-        (Locale::Fr, chrono::Weekday::Fri) => "V",
-        (Locale::Fr, chrono::Weekday::Sat) => "S",
-        (Locale::Fr, chrono::Weekday::Sun) => "D",
-        (Locale::En, chrono::Weekday::Mon) => "M",
-        (Locale::En, chrono::Weekday::Tue) => "T",
-        (Locale::En, chrono::Weekday::Wed) => "W",
-        (Locale::En, chrono::Weekday::Thu) => "Th",
-        (Locale::En, chrono::Weekday::Fri) => "F",
-        (Locale::En, chrono::Weekday::Sat) => "Sa",
-        (Locale::En, chrono::Weekday::Sun) => "Su",
     }
 }
 
