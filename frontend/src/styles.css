@@ -12,15 +12,23 @@
   --red: #b42318;
   --green: #2f7d46;
   --shadow: 0 14px 45px rgba(25, 38, 34, 0.10);
-  --plot-left-inset: 62px;
-  --plot-right-inset: 62px;
-  --chart-pad-x: 12px;
-  --chart-gap: 16px;
-  --value-column-width: minmax(210px, 280px);
+  --plot-left-inset: 56px;
+  --plot-right-inset: 56px;
+  --plot-y-pad: 9px;
+  --chart-pad-y: 10px;
+  --chart-pad-x: 10px;
+  --chart-gap: 10px;
+  --value-column-width: minmax(196px, 264px);
   --chart-content-min-width: 100%;
   --plot-grid-line: rgba(97, 112, 106, 0.15);
   --plot-midnight-line: rgba(23, 33, 29, 0.48);
   --plot-cursor-line: rgba(23, 33, 29, 0.52);
+  --type-xs: 0.75rem;
+  --type-sm: 0.875rem;
+  --type-md: 1rem;
+  --type-lg: 1.125rem;
+  --time-label-size: 0.875rem;
+  --axis-label-size: 1.125rem;
   --font-ui: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", ui-sans-serif, system-ui,
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-brand: "Hanken Grotesk", var(--font-ui);
@@ -158,7 +166,7 @@ a {
   max-width: 100%;
   color: var(--muted);
   font-family: var(--font-brand);
-  font-size: 0.78rem;
+  font-size: var(--type-xs);
   font-weight: 850;
   line-height: 1.1;
   white-space: nowrap;
@@ -180,7 +188,7 @@ a {
 .eyebrow {
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--type-xs);
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -351,13 +359,13 @@ a {
   gap: 4px 12px;
   min-width: 0;
   color: var(--ink);
-  font-size: 0.9rem;
+  font-size: var(--type-sm);
   font-weight: 750;
 }
 
 .label {
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: var(--type-xs);
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -370,7 +378,7 @@ a {
   min-height: 26px;
   padding: 0 10px;
   border-radius: 999px;
-  font-size: 0.76rem;
+  font-size: var(--type-xs);
   font-weight: 900;
 }
 
@@ -489,7 +497,7 @@ a {
 .location-subtitle {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: var(--type-sm);
   font-weight: 700;
   line-height: 1.25;
 }
@@ -621,7 +629,7 @@ a {
   gap: 3px;
   justify-items: center;
   color: var(--ink);
-  font-size: 1rem;
+  font-size: var(--type-md);
   font-variant-numeric: tabular-nums;
   font-weight: 850;
   line-height: 1.05;
@@ -636,7 +644,7 @@ a {
 
 .live-clock-label {
   color: var(--muted);
-  font-size: 0.66rem;
+  font-size: var(--type-xs);
   font-weight: 850;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -652,14 +660,14 @@ a {
   align-items: baseline;
   gap: 5px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--type-xs);
   font-weight: 800;
 }
 
 .live-clock-air strong {
   color: var(--red);
   font-family: var(--font-number);
-  font-size: 0.95rem;
+  font-size: var(--type-md);
 }
 
 .app-shell.focus-mode .station-live-clock,
@@ -690,13 +698,13 @@ a {
   gap: 6px;
   margin: 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--type-xs);
   line-height: 1.35;
 }
 
 .station-footnote strong {
   flex: 0 0 auto;
-  font-size: 0.68rem;
+  font-size: var(--type-xs);
   font-weight: 850;
   text-transform: uppercase;
 }
@@ -752,13 +760,13 @@ a {
   min-width: 0;
   margin: 0;
   color: var(--ink);
-  font-size: clamp(0.9rem, 1.2vw, 1.08rem);
+  font-size: var(--type-md);
   font-weight: 750;
   line-height: 1.18;
 }
 
 .app-shell.focus-mode .chart-context-label {
-  font-size: clamp(1.02rem, 1.7vw, 1.35rem);
+  font-size: var(--type-lg);
   font-weight: 900;
   line-height: 1.12;
 }
@@ -767,7 +775,7 @@ a {
   position: relative;
   z-index: 2;
   display: grid;
-  padding: 10px var(--chart-pad-x);
+  padding: var(--chart-pad-y) var(--chart-pad-x);
   overflow: hidden;
   min-width: 0;
   --metric-axis: var(--muted);
@@ -787,6 +795,7 @@ a {
   --metric-axis: var(--metric-line);
   --metric-fill: #1f9fc4;
   --metric-grid: rgba(37, 99, 235, 0.14);
+  padding-bottom: calc(var(--chart-pad-y) + 4px);
 }
 
 .plot-row {
@@ -813,8 +822,8 @@ a {
 
 .custom-y-axis {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: var(--plot-y-pad);
+  bottom: var(--plot-y-pad);
   left: 0;
   width: var(--plot-left-inset);
   pointer-events: none;
@@ -829,22 +838,24 @@ a {
 .custom-y-axis-title {
   position: absolute;
   top: 50%;
-  right: 45px;
-  color: var(--metric-axis);
-  font-size: 0.68rem;
+  right: 40px;
+  color: var(--muted);
+  font-size: var(--axis-label-size);
   font-weight: 850;
   letter-spacing: 0;
   line-height: 1;
-  opacity: 0.92;
-  text-transform: uppercase;
+  opacity: 0.95;
+  text-transform: none;
   transform: translateY(-50%) rotate(180deg);
   white-space: nowrap;
   writing-mode: vertical-rl;
 }
 
 .custom-y-axis-right .custom-y-axis-title {
+  display: none;
   right: auto;
-  left: 45px;
+  left: 40px;
+  font-size: var(--axis-label-size);
 }
 
 .risk-axis-scale {
@@ -887,7 +898,7 @@ a {
   width: 32px;
   color: var(--metric-axis);
   font-family: var(--font-number);
-  font-size: 0.68rem;
+  font-size: var(--type-sm);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -895,6 +906,14 @@ a {
   text-align: right;
   transform: translateY(-50%);
   white-space: nowrap;
+}
+
+.custom-y-tick.edge-top {
+  transform: translateY(0);
+}
+
+.custom-y-tick.edge-bottom {
+  transform: translateY(-100%);
 }
 
 .custom-y-axis.has-risk-scale .custom-y-tick {
@@ -925,7 +944,7 @@ a {
 
 .custom-plot-area {
   position: absolute;
-  inset: 0;
+  inset: var(--plot-y-pad) 0;
 }
 
 .plot-scroll-viewport {
@@ -973,6 +992,11 @@ a {
 .custom-grid-x line.midnight {
   stroke: var(--plot-midnight-line);
   stroke-width: 2;
+}
+
+.custom-grid-x line.six-hour,
+.custom-grid-x line.eighteen-hour {
+  opacity: 0.55;
 }
 
 .sun-shading rect {
@@ -1097,7 +1121,7 @@ a {
   gap: 10px;
   max-width: 100%;
   min-width: 0;
-  padding-left: 8px;
+  padding-left: 0;
 }
 
 .plot-current-stacked {
@@ -1112,14 +1136,11 @@ a {
 
 .plot-current-heading h3 {
   margin: 0;
-  font-size: 0.98rem;
-  line-height: 1.15;
-}
-
-.plot-current-heading small {
   color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.25;
+  font-size: var(--axis-label-size);
+  font-weight: 850;
+  line-height: 1.15;
+  opacity: 0.95;
 }
 
 .plot-readout {
@@ -1168,7 +1189,7 @@ a {
 }
 
 .discharge-comment {
-  font-size: 0.76rem;
+  font-size: var(--type-md);
   font-weight: 850;
   letter-spacing: 0;
   line-height: 1.2;
@@ -1198,7 +1219,7 @@ a {
 
 .plot-last-measure span {
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: var(--type-xs);
   font-weight: 850;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -1207,7 +1228,7 @@ a {
 .plot-last-measure time {
   color: var(--ink);
   font-family: var(--font-number);
-  font-size: 0.98rem;
+  font-size: var(--type-md);
   font-weight: 850;
   white-space: nowrap;
 }
@@ -1223,26 +1244,30 @@ a {
 }
 
 .shared-time-axis {
-  position: relative;
-  z-index: 3;
+  position: absolute;
+  right: var(--chart-pad-x);
+  left: var(--chart-pad-x);
+  z-index: 5;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--value-column-width);
   gap: var(--chart-gap);
-  padding: 0 var(--chart-pad-x);
-  background: #ffffff;
+  padding: 0;
+  background: transparent;
   color: var(--muted);
+  pointer-events: none;
 }
 
 .time-axis-top {
-  padding-top: 8px;
+  top: 0;
+  margin: 0;
 }
 
 .time-axis-bottom {
-  padding-bottom: 8px;
+  bottom: 0;
+  margin: 0;
 }
 
-.time-axis-top .axis-rule-top,
-.time-axis-bottom .axis-rule-bottom {
+.axis-rule {
   display: none;
 }
 
@@ -1255,6 +1280,7 @@ a {
 
 .axis-range-label {
   display: none;
+  font-size: var(--type-xs);
 }
 
 .axis-scroll-viewport {
@@ -1262,7 +1288,6 @@ a {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 2px;
   scrollbar-width: none;
 }
 
@@ -1276,22 +1301,17 @@ a {
   min-width: 100%;
 }
 
-.axis-rule {
-  position: relative;
-  height: 8px;
-  width: 100%;
-}
-
 .axis-rule-top {
-  border-bottom: 1px solid var(--plot-grid-line);
+  border-top: 1px solid var(--plot-grid-line);
 }
 
 .axis-rule-bottom {
-  border-top: 1px solid var(--plot-grid-line);
+  border-bottom: 1px solid var(--plot-grid-line);
 }
 
 .axis-tick-mark {
   position: absolute;
+  display: none;
   width: 1px;
   height: 6px;
   background: var(--plot-grid-line);
@@ -1299,11 +1319,11 @@ a {
 }
 
 .axis-rule-top .axis-tick-mark {
-  bottom: -1px;
+  top: -1px;
 }
 
 .axis-rule-bottom .axis-tick-mark {
-  top: -1px;
+  bottom: -1px;
 }
 
 .axis-tick-mark.midnight {
@@ -1317,13 +1337,15 @@ a {
   background: rgba(97, 112, 106, 0.24);
 }
 
-.axis-tick-mark.hour {
-  height: 4px;
+.axis-tick-mark.six-hour,
+.axis-tick-mark.eighteen-hour {
+  height: 5px;
+  opacity: 0.65;
 }
 
 .axis-labels {
   position: relative;
-  height: 17px;
+  height: 19px;
   min-width: 0;
 }
 
@@ -1333,31 +1355,22 @@ a {
   width: 26px;
   color: var(--muted);
   font-family: var(--font-number);
-  font-size: 0.68rem;
+  font-size: var(--time-label-size);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   line-height: 1.15;
   opacity: 0.9;
-  overflow: hidden;
+  overflow: visible;
   text-align: center;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   transform: translateX(-50%);
 }
 
-.axis-label.hour {
-  width: 24px;
-  opacity: 0.72;
-}
-
 .axis-label.noon {
-  width: 76px;
+  width: 96px;
   font-weight: 850;
   opacity: 0.95;
-}
-
-.axis-label.edge-hour {
-  display: none;
 }
 
 .axis-label.start {
@@ -1385,11 +1398,11 @@ a {
 }
 
 .axis-rule-top .axis-hover-tick {
-  bottom: -1px;
+  top: -1px;
 }
 
 .axis-rule-bottom .axis-hover-tick {
-  top: -1px;
+  bottom: -1px;
 }
 
 .empty-state {
@@ -1427,15 +1440,13 @@ a {
 
 @media (max-width: 1180px) {
   .axis-label {
-    width: 44px;
-    font-size: 0.66rem;
+    width: 54px;
   }
 
   .axis-range-label {
-    display: block;
+    display: none;
     margin: 0 0 2px;
     color: var(--muted);
-    font-size: 0.6rem;
     font-weight: 750;
     line-height: 1;
     text-align: center;
@@ -1450,18 +1461,17 @@ a {
     display: inline;
   }
 
-  .axis-label.hour {
-    display: none;
-    opacity: 0.68;
-  }
-
   .axis-label.noon {
     display: block;
-    width: 68px;
+    width: 92px;
   }
 }
 
 @media (max-width: 1180px) {
+  .custom-y-axis-right .custom-y-axis-title {
+    display: block;
+  }
+
   .station-heading {
     align-items: start;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1528,7 +1538,7 @@ a {
 
 @media (max-width: 760px) {
   .axis-label {
-    width: 28px;
+    width: 38px;
   }
 
   .axis-label-wide {
@@ -1540,13 +1550,13 @@ a {
   }
 
   .axis-label.noon {
-    width: 46px;
+    width: 68px;
   }
 }
 
 @media (max-width: 540px) {
   .axis-label {
-    width: 20px;
+    width: 30px;
   }
 
   .axis-label-medium {
@@ -1559,7 +1569,7 @@ a {
 
   .axis-label.noon {
     display: block;
-    width: 34px;
+    width: 46px;
   }
 }
 
@@ -1611,10 +1621,12 @@ a {
 
 @media (max-width: 640px) {
   :root {
-    --plot-left-inset: 50px;
-    --plot-right-inset: 42px;
-    --chart-pad-x: 6px;
-    --chart-gap: 8px;
+    --plot-left-inset: 46px;
+    --plot-right-inset: 40px;
+    --plot-y-pad: 10px;
+    --chart-pad-y: 8px;
+    --chart-pad-x: 5px;
+    --chart-gap: 7px;
     --value-column-width: minmax(94px, 26vw);
     --chart-content-min-width: 150px;
   }
@@ -1639,11 +1651,6 @@ a {
     height: 230px;
   }
 
-  .chart-card {
-    padding-top: 8px;
-    padding-bottom: 8px;
-  }
-
   .chart-measure-row {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -1651,14 +1658,6 @@ a {
 
   .chart-measure-footer {
     padding-bottom: 6px;
-  }
-
-  .chart-context-label {
-    font-size: clamp(0.84rem, 3.7vw, 1rem);
-  }
-
-  .app-shell.focus-mode .chart-context-label {
-    font-size: clamp(0.98rem, 4.6vw, 1.24rem);
   }
 
   .station-heading {
@@ -1676,16 +1675,8 @@ a {
     font-size: clamp(1.22rem, 6vw, 1.72rem);
   }
 
-  .location-subtitle {
-    font-size: 0.84rem;
-  }
-
   .station-live-clock .live-clock-time {
     font-size: clamp(1.05rem, 5.7vw, 1.45rem);
-  }
-
-  .station-live-clock .live-clock-air {
-    font-size: 0.7rem;
   }
 
   .app-shell.focus-mode .station-heading,
@@ -1725,13 +1716,12 @@ a {
   }
 
   .custom-y-axis-title {
-    right: 35px;
-    font-size: 0.62rem;
+    right: 32px;
   }
 
   .custom-y-axis-right .custom-y-axis-title {
     right: auto;
-    left: 29px;
+    left: 28px;
   }
 
   .risk-axis-scale {
@@ -1741,7 +1731,6 @@ a {
   .custom-y-tick {
     right: 2px;
     width: 26px;
-    font-size: 0.64rem;
   }
 
   .custom-y-axis.has-risk-scale .custom-y-tick {
@@ -1756,21 +1745,12 @@ a {
     padding: 8px var(--plot-right-inset) 0 var(--plot-left-inset);
   }
 
-  .plot-current-heading h3 {
-    font-size: 0.82rem;
-  }
-
-  .plot-current-heading small {
-    font-size: 0.68rem;
-  }
-
   .plot-current strong {
     font-size: clamp(1.62rem, 8.8vw, 2.45rem);
   }
 
   .discharge-comment {
     max-width: 120px;
-    font-size: 0.66rem;
     text-align: right;
   }
 }
@@ -1789,17 +1769,17 @@ a {
 
 @media (max-width: 420px) {
   :root {
-    --plot-left-inset: 44px;
-    --plot-right-inset: 38px;
+    --plot-left-inset: 42px;
+    --plot-right-inset: 36px;
     --value-column-width: minmax(88px, 25vw);
   }
 
   .custom-y-axis-title {
-    right: 30px;
+    right: 29px;
   }
 
   .custom-y-axis-right .custom-y-axis-title {
-    left: 26px;
+    left: 24px;
   }
 
   .custom-y-tick {
@@ -1810,14 +1790,5 @@ a {
 @media (max-width: 360px) {
   .axis-label {
     width: 16px;
-    font-size: 0.58rem;
-  }
-
-  .axis-label.day {
-    width: 16px;
-  }
-
-  .axis-range-label {
-    font-size: 0.56rem;
   }
 }

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
 use dioxus::events::{MouseEvent, ScrollEvent};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -170,13 +170,13 @@ enum DischargeSafety {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AxisTickKind {
     Midnight,
+    SixHour,
     Noon,
-    Hour,
+    EighteenHour,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct AxisTick {
-    label: String,
     timestamp: f64,
     position: f64,
     kind: AxisTickKind,
@@ -678,17 +678,10 @@ fn StationPanel(
                     p { class: "chart-context-label", "{heading_subtitle}" }
                 }
 
-                TimeAxis {
-                    domain: domain.clone(),
-                    placement: "top".to_string(),
-                    locale,
-                    hover_state,
-                    idle_hover_state,
-                }
-
                 {metric_chart(
                     &station,
                     MetricKind::Temperature,
+                    Some("top"),
                     temperature_history,
                     temperature_forecast,
                     &domain,
@@ -713,6 +706,7 @@ fn StationPanel(
                 {metric_chart(
                     &station,
                     MetricKind::Discharge,
+                    Some("bottom"),
                     discharge_history,
                     discharge_forecast,
                     &domain,
@@ -721,14 +715,6 @@ fn StationPanel(
                     None,
                     idle_hover_state,
                 )}
-
-                TimeAxis {
-                    domain: domain.clone(),
-                    placement: "bottom".to_string(),
-                    locale,
-                    hover_state,
-                    idle_hover_state,
-                }
 
                 {metric_readout(
                     &station,
@@ -812,7 +798,7 @@ fn TimeAxis(
                         }
                         div { class: "axis-labels",
                             for tick in domain.ticks.iter() {
-                                if tick.kind != AxisTickKind::Midnight {
+                                if tick.kind == AxisTickKind::Noon {
                                     span {
                                         class: "{axis_label_class(tick)}",
                                         style: format!("left: {:.3}%;", tick.position),
@@ -849,6 +835,7 @@ fn TimeAxis(
 fn metric_chart(
     station: &StationData,
     kind: MetricKind,
+    time_axis_placement: Option<&str>,
     history: Option<&MetricSeries>,
     forecast: Option<&MetricSeries>,
     domain: &TimeDomain,
@@ -924,6 +911,15 @@ fn metric_chart(
 
     rsx! {
         div { class: "{chart_class}",
+            if time_axis_placement == Some("top") {
+                TimeAxis {
+                    domain: domain.clone(),
+                    placement: "top".to_string(),
+                    locale,
+                    hover_state,
+                    idle_hover_state,
+                }
+            }
             div { class: "plot-row",
                 div { class: "chart-frame",
                     div { class: "custom-chart",
@@ -1103,6 +1099,15 @@ fn metric_chart(
                     None,
                     "plot-current plot-current-inline",
                 )}
+            }
+            if time_axis_placement == Some("bottom") {
+                TimeAxis {
+                    domain: domain.clone(),
+                    placement: "bottom".to_string(),
+                    locale,
+                    hover_state,
+                    idle_hover_state,
+                }
             }
         }
     }
@@ -1575,54 +1580,56 @@ fn value_tick_class(
     tick: &ValueTick,
     discharge_reference: Option<f64>,
 ) -> String {
-    let Some(reference) = discharge_reference else {
-        return "custom-y-tick".to_string();
-    };
-    if kind != MetricKind::Discharge {
-        return "custom-y-tick".to_string();
+    let mut classes = vec!["custom-y-tick"];
+    if tick.position <= 0.5 {
+        classes.push("edge-top");
+    } else if tick.position >= 99.5 {
+        classes.push("edge-bottom");
     }
-    format!(
-        "custom-y-tick {}",
-        safety_class(discharge_safety(tick.value, reference))
-    )
+    if let Some(reference) = discharge_reference {
+        if kind == MetricKind::Discharge {
+            classes.push(safety_class(discharge_safety(tick.value, reference)));
+        }
+    }
+    classes.join(" ")
 }
 
 fn time_ticks(min: f64, max: f64) -> Vec<AxisTick> {
     let Some(start_utc) = DateTime::<Utc>::from_timestamp(min as i64, 0) else {
         return Vec::new();
     };
-    let start_local = start_utc.with_timezone(&Local);
-    let rounded_hour = (start_local.hour() / 6) * 6;
-    let Some(mut cursor) = local_datetime(start_local.date_naive(), rounded_hour, 0, 0) else {
+    let Some(end_utc) = DateTime::<Utc>::from_timestamp(max as i64, 0) else {
         return Vec::new();
     };
-    while (cursor.timestamp() as f64) < min {
-        cursor += Duration::hours(6);
-    }
+    let mut date = start_utc.with_timezone(&Local).date_naive();
+    let end_date = end_utc.with_timezone(&Local).date_naive();
 
     let mut ticks = Vec::new();
-    while cursor.timestamp() as f64 <= max + 1.0 {
-        let timestamp = cursor.timestamp() as f64;
-        let hour = cursor.hour();
-        let kind = if hour == 0 {
-            AxisTickKind::Midnight
-        } else if hour == 12 {
-            AxisTickKind::Noon
-        } else {
-            AxisTickKind::Hour
-        };
-        let label = match kind {
-            AxisTickKind::Midnight => String::new(),
-            AxisTickKind::Noon => "12".to_string(),
-            AxisTickKind::Hour => format!("{hour:02}"),
-        };
-        ticks.push(AxisTick {
-            label,
-            timestamp,
-            position: ((timestamp - min) / (max - min).max(1.0) * 100.0).clamp(0.0, 100.0),
-            kind,
-        });
-        cursor += Duration::hours(6);
+    while date <= end_date {
+        for hour in [0, 6, 12, 18] {
+            let Some(cursor) = local_datetime(date, hour, 0, 0) else {
+                continue;
+            };
+            let timestamp = cursor.timestamp() as f64;
+            if timestamp < min || timestamp > max + 1.0 {
+                continue;
+            }
+            let kind = if hour == 0 {
+                AxisTickKind::Midnight
+            } else if hour == 6 {
+                AxisTickKind::SixHour
+            } else if hour == 12 {
+                AxisTickKind::Noon
+            } else {
+                AxisTickKind::EighteenHour
+            };
+            ticks.push(AxisTick {
+                timestamp,
+                position: ((timestamp - min) / (max - min).max(1.0) * 100.0).clamp(0.0, 100.0),
+                kind,
+            });
+        }
+        date += Duration::days(1);
     }
 
     ticks
@@ -2174,8 +2181,9 @@ fn metric_kind_class(kind: MetricKind) -> &'static str {
 fn tick_kind_class(kind: AxisTickKind) -> &'static str {
     match kind {
         AxisTickKind::Midnight => "midnight",
+        AxisTickKind::SixHour => "six-hour",
         AxisTickKind::Noon => "noon",
-        AxisTickKind::Hour => "hour",
+        AxisTickKind::EighteenHour => "eighteen-hour",
     }
 }
 
@@ -2186,41 +2194,34 @@ fn axis_label_class(tick: &AxisTick) -> String {
     } else if tick.position >= 99.5 {
         class.push_str(" end");
     }
-    if tick.kind == AxisTickKind::Hour && (tick.position <= 5.5 || tick.position >= 94.5) {
-        class.push_str(" edge-hour");
-    }
     class
 }
 
 fn axis_label_full(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Midnight => String::new(),
         AxisTickKind::Noon => date_label_full(tick.timestamp, locale),
-        AxisTickKind::Hour => tick.label.clone(),
+        _ => String::new(),
     }
 }
 
 fn axis_label_wide(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Midnight => String::new(),
         AxisTickKind::Noon => date_label_full(tick.timestamp, locale),
-        AxisTickKind::Hour => tick.label.clone(),
+        _ => String::new(),
     }
 }
 
 fn axis_label_medium(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Midnight => String::new(),
         AxisTickKind::Noon => date_label_compact(tick.timestamp, locale, false),
-        AxisTickKind::Hour => tick.label.clone(),
+        _ => String::new(),
     }
 }
 
 fn axis_label_short(tick: &AxisTick, locale: Locale) -> String {
     match tick.kind {
-        AxisTickKind::Midnight => String::new(),
         AxisTickKind::Noon => date_label_compact(tick.timestamp, locale, true),
-        AxisTickKind::Hour => tick.label.clone(),
+        _ => String::new(),
     }
 }
 
