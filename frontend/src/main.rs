@@ -562,7 +562,10 @@ fn DashboardView(
                         button {
                             class: if station.id == selected_station() { "station-tab active" } else { "station-tab" },
                             r#type: "button",
-                            onclick: move |_| selected_station.set(station.id.clone()),
+                            onclick: move |_| {
+                                selected_station.set(station.id.clone());
+                                scroll_page_to_top();
+                            },
                             strong { "{station_title(&station, locale)}" }
                             small { "{station_tab_detail(&station, locale)}" }
                         }
@@ -2183,6 +2186,13 @@ fn store_focus_mode(enabled: bool) {
 
     #[cfg(not(target_arch = "wasm32"))]
     let _ = enabled;
+}
+
+fn scroll_page_to_top() {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(window) = web_sys::window() {
+        window.scroll_to_with_x_and_y(0.0, 0.0);
+    }
 }
 
 fn tr<'a>(locale: Locale, fr: &'a str, en: &'a str) -> &'a str {

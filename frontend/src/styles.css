@@ -1204,26 +1204,26 @@ a {
 }
 
 .station-panel.pro-rhone .custom-line.discharge {
-  stroke: #c62828;
+  stroke: #1287a8;
 }
 
 .station-panel.pro-rhone .custom-area.discharge {
-  fill: #c62828;
+  fill: #1f9fc4;
 }
 
 .station-panel.pro-rhone .custom-line.forecast.discharge {
   stroke: #c62828;
   stroke-dasharray: none;
-  opacity: 0.58;
+  opacity: 0.72;
 }
 
-.station-panel.pro-rhone .custom-area.forecast.discharge {
+.station-panel.pro-rhone .custom-area.forecast {
   fill: #c62828;
-  fill-opacity: 0.08;
+  fill-opacity: 0.06;
 }
 
 .station-panel.pro-rhone .readout-value.discharge {
-  color: #c62828;
+  color: #1287a8;
 }
 
 .custom-line.air-temperature {

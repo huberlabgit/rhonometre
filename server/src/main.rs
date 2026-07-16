@@ -1970,7 +1970,7 @@ async fn load_programme_forecasts_from_db(db: &PgPool) -> Result<ProgrammeForeca
               )
               AND timestamp >= (
                   date_trunc('day', now() AT TIME ZONE 'Europe/Zurich')
-                  + interval '1 day'
+                  - interval '1 day'
               ) AT TIME ZONE 'Europe/Zurich'
               AND timestamp < (
                   date_trunc('day', now() AT TIME ZONE 'Europe/Zurich')
@@ -2648,7 +2648,7 @@ fn geneva_today() -> NaiveDate {
 }
 
 fn is_visible_forecast_date(today: NaiveDate, date: NaiveDate) -> bool {
-    date > today && date <= today + chrono::Duration::days(3)
+    date >= today - chrono::Duration::days(1) && date <= today + chrono::Duration::days(3)
 }
 
 fn sig_programme_source(date: NaiveDate, hourly_dates: &HashSet<NaiveDate>) -> &'static str {
@@ -3833,9 +3833,17 @@ mod tests {
     }
 
     #[test]
-    fn pro_forecast_dates_are_tomorrow_through_day_three() {
+    fn pro_forecast_dates_are_yesterday_through_day_three() {
         let today = NaiveDate::from_ymd_opt(2026, 7, 16).expect("valid date");
-        assert!(!is_visible_forecast_date(today, today));
+        assert!(!is_visible_forecast_date(
+            today,
+            NaiveDate::from_ymd_opt(2026, 7, 14).expect("valid date")
+        ));
+        assert!(is_visible_forecast_date(
+            today,
+            NaiveDate::from_ymd_opt(2026, 7, 15).expect("valid date")
+        ));
+        assert!(is_visible_forecast_date(today, today));
         assert!(is_visible_forecast_date(
             today,
             NaiveDate::from_ymd_opt(2026, 7, 17).expect("valid date")
