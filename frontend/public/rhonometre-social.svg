@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#071511" stop-opacity="0.88" />
+      <stop offset="0.68" stop-color="#071511" stop-opacity="0.42" />
+      <stop offset="1" stop-color="#071511" stop-opacity="0.18" />
+    </linearGradient>
+  </defs>
+  <image xlink:href="rhone-background.jpg" width="1200" height="904" y="-137" preserveAspectRatio="xMidYMid slice" />
+  <rect width="1200" height="630" fill="url(#shade)" />
+  <g fill="#ffffff" font-family="Calibri, Carlito, Arial, sans-serif">
+    <text x="76" y="244" font-size="118" font-weight="700">rhonometre</text>
+    <text x="80" y="312" font-size="44" font-weight="700">Pontonnier·ère·s de Genève</text>
+    <line x1="80" y1="357" x2="690" y2="357" stroke="#ffffff" stroke-width="3" opacity="0.78" />
+    <text x="80" y="417" font-size="34" font-weight="600">Température et débit du Rhône</text>
+    <text x="80" y="462" font-size="34" font-weight="600">avant la Jonction</text>
+  </g>
+  <image xlink:href="Logo_Pontonniers_Round_White.png" x="963" y="393" width="155" height="161" preserveAspectRatio="xMidYMid meet" />
+</svg>

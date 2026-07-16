@@ -2025,6 +2025,74 @@ a {
   }
 }
 
+@media (min-width: 2560px) and (min-height: 1400px) {
+  :root {
+    --plot-left-inset: 92px;
+    --plot-right-inset: 92px;
+    --plot-y-pad: 14px;
+    --chart-pad-y: 24px;
+    --chart-pad-x: 24px;
+    --chart-gap: 18px;
+    --value-column-width: minmax(300px, 390px);
+    --type-xs: 1.25rem;
+    --type-sm: 1.4rem;
+    --type-md: 1.55rem;
+    --type-lg: 1.65rem;
+    --time-label-size: 1.4rem;
+    --axis-label-size: 1.55rem;
+    --chart-label-size: 1.4rem;
+  }
+
+  .app-shell {
+    width: min(90vw, 2800px);
+    max-width: none;
+    padding-top: 28px;
+    padding-bottom: 54px;
+  }
+
+  .app-shell.focus-mode {
+    width: min(94vw, 3000px);
+    max-width: none;
+    padding-top: 18px;
+    padding-bottom: 34px;
+  }
+
+  .app-shell.branded-mode {
+    --station-attribution-size: clamp(2rem, 1.25vw, 3rem);
+  }
+
+  .app-shell.branded-mode .station-heading {
+    --station-title-size: clamp(5rem, 3.2vw, 7rem);
+  }
+
+  .chart-frame {
+    height: clamp(390px, 27vh, 540px);
+  }
+
+  .chart-card.temperature {
+    padding-top: calc(var(--chart-pad-y) + 40px);
+  }
+
+  .chart-card.discharge {
+    padding-bottom: calc(var(--chart-pad-y) + 50px);
+  }
+
+  .focus-corner-marks {
+    width: calc(100% - 56px);
+    margin-top: 8px;
+  }
+
+  .focus-corner-logo,
+  .focus-corner-qr {
+    width: clamp(150px, 5vw, 210px);
+  }
+
+  .focus-toggle-button {
+    right: 22px;
+    bottom: 22px;
+  }
+}
+
 .custom-y-axis-title,
 .custom-y-tick,
 .plot-current-heading h3,
