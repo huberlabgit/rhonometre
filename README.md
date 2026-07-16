@@ -10,7 +10,8 @@ Default stations:
 
 - Arve - Genève, Bout du Monde (`2170`)
 - Rhône - Genève, Halle de l'Ile (`2606`, measured when Hydrodaten is online, estimated fallback otherwise)
-- Lac Léman - Genève, Sécheron (`2028`, source data only)
+- Lac Léman (`2028` level at Genève-Sécheron, paired in the non-focus dashboard with
+  the `2606` lake-outflow temperature at Halle de l'Ile)
 - Rhône - Chancy, Aux Ripes (`2174`, downstream/post-Jonction Rhône reference)
 
 The UI currently shows Arve, Halle de l'Ile, and Chancy tabs. Water level is stored when Hydrodaten exposes it, but the client does not render it.

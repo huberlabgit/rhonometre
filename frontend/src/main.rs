@@ -493,16 +493,23 @@ fn DashboardView(
     pro_enabled: bool,
     live_clock: String,
 ) -> Element {
-    let river_stations = data
+    let lake_temperature_reference = data.stations.iter().find(|station| station.id == "2606");
+    let stations = data
         .stations
         .iter()
-        .filter(|station| station.kind == WaterKind::River)
+        .cloned()
+        .map(|station| station_with_lake_temperature(station, lake_temperature_reference))
+        .collect::<Vec<_>>();
+    let visible_stations = stations
+        .iter()
+        .filter(|station| !focus_mode || station.kind == WaterKind::River)
         .cloned()
         .collect::<Vec<_>>();
-    let selected = river_stations
+    let selected = visible_stations
         .iter()
         .find(|station| station_matches(station, &selected_station()))
-        .or_else(|| river_stations.first())
+        .or_else(|| visible_stations.iter().find(|station| station.id == "2606"))
+        .or_else(|| visible_stations.first())
         .cloned();
     rsx! {
         div { class: if focus_mode { "dashboard dashboard-focus" } else if embed_mode { "dashboard dashboard-embed" } else { "dashboard" },
@@ -520,13 +527,13 @@ fn DashboardView(
 
             if !focus_mode && !embed_mode {
                 div { class: "station-tabs station-tabs-bottom",
-                    for station in river_stations {
+                    for station in stations {
                         button {
                             class: if station.id == selected_station() { "station-tab active" } else { "station-tab" },
                             r#type: "button",
                             onclick: move |_| selected_station.set(station.id.clone()),
                             strong { "{station_title(&station, locale)}" }
-                            small { "{station_tab_detail(locale)}" }
+                            small { "{station_tab_detail(&station, locale)}" }
                         }
                     }
                 }
@@ -581,25 +588,26 @@ fn StationPanel(
 ) -> Element {
     let hover_state = use_signal(|| None::<HoverState>);
     let domain = station_time_domain(&station, pro_enabled);
-    let discharge_history = series_for_kind(&station.history, MetricKind::Discharge);
-    let discharge_forecast = if pro_enabled {
-        series_for_kind(&station.forecast, MetricKind::Discharge)
-    } else {
-        None
-    };
     let temperature_history = series_for_kind(&station.history, MetricKind::Temperature);
     let temperature_forecast = if pro_enabled {
         series_for_kind(&station.forecast, MetricKind::Temperature)
     } else {
         None
     };
-    let station_notice = if station.source == StationDataSource::Derived {
-        match locale {
-            Locale::Fr => station.notice_fr.clone(),
-            Locale::En => station.notice_en.clone(),
-        }
+    let secondary_kind = if station.kind == WaterKind::Lake {
+        MetricKind::WaterLevel
+    } else {
+        MetricKind::Discharge
+    };
+    let secondary_history = series_for_kind(&station.history, secondary_kind);
+    let secondary_forecast = if pro_enabled {
+        series_for_kind(&station.forecast, secondary_kind)
     } else {
         None
+    };
+    let station_notice = match locale {
+        Locale::Fr => station.notice_fr.clone(),
+        Locale::En => station.notice_en.clone(),
     };
     let latest_measurement = latest_station_measurement(&station, locale);
     let measurement_readout = hover_state()
@@ -709,10 +717,10 @@ fn StationPanel(
 
                 {metric_chart(
                     &station,
-                    MetricKind::Discharge,
+                    secondary_kind,
                     Some("bottom"),
-                    discharge_history,
-                    discharge_forecast,
+                    secondary_history,
+                    secondary_forecast,
                     &domain,
                     locale,
                     hover_state,
@@ -723,9 +731,9 @@ fn StationPanel(
 
                 {metric_readout(
                     &station,
-                    MetricKind::Discharge,
-                    discharge_history,
-                    discharge_forecast,
+                    secondary_kind,
+                    secondary_history,
+                    secondary_forecast,
                     &domain,
                     locale,
                     hover_state,
@@ -869,7 +877,7 @@ fn metric_chart(
         None
     };
     let risk_axis_segments = discharge_reference
-        .map(|reference| discharge_risk_axis_segments(&axis, reference))
+        .map(|reference| discharge_risk_axis_segments(station, &axis, reference))
         .unwrap_or_default();
     let y_axis_class = if risk_axis_segments.is_empty() {
         "custom-y-axis"
@@ -931,7 +939,7 @@ fn metric_chart(
                             }
                             for tick in axis.ticks.iter() {
                                 span {
-                                    class: value_tick_class(kind, tick, discharge_reference),
+                                    class: value_tick_class(station, kind, tick, discharge_reference),
                                     style: format!("top: {:.3}%;", tick.position),
                                     "{tick.label}"
                                 }
@@ -951,7 +959,7 @@ fn metric_chart(
                             }
                             for tick in axis.ticks.iter() {
                                 span {
-                                    class: value_tick_class(kind, tick, discharge_reference),
+                                    class: value_tick_class(station, kind, tick, discharge_reference),
                                     style: format!("top: {:.3}%;", tick.position),
                                     "{tick.label}"
                                 }
@@ -1147,8 +1155,9 @@ fn metric_readout(
         None
     };
     let safety = if kind == MetricKind::Discharge {
-        discharge_reference
-            .and_then(|reference| readout_value.map(|value| discharge_safety(value, reference)))
+        discharge_reference.and_then(|reference| {
+            readout_value.map(|value| discharge_safety(station, value, reference))
+        })
     } else {
         None
     };
@@ -1171,7 +1180,7 @@ fn metric_readout(
                 if let Some(safety) = safety {
                     span {
                         class: format!("discharge-comment {}", safety_class(safety)),
-                        "{safety_label(safety, locale)}"
+                        "{safety_label(station, safety, locale)}"
                     }
                 }
                 if let Some((measurement_label, measurement_time)) = measurement_readout {
@@ -1351,7 +1360,50 @@ fn value_axis(
                 ticks,
             }
         }
-        MetricKind::WaterLevel => ValueAxis::bare(0.0, 1.0),
+        MetricKind::WaterLevel => {
+            let values = history
+                .iter()
+                .chain(forecast.iter())
+                .map(|point| point.value)
+                .chain(current_for_kind(station, kind).map(|metric| metric.value))
+                .collect::<Vec<_>>();
+            let observed_min = values.iter().copied().reduce(f64::min).unwrap_or(0.0);
+            let observed_max = values.iter().copied().reduce(f64::max).unwrap_or(1.0);
+            let padding = ((observed_max - observed_min) * 0.12).max(0.02);
+            let mut min = observed_min - padding;
+            let mut max = observed_max + padding;
+            const MIN_LEVEL_SPAN_M: f64 = 0.5;
+            const LEVEL_TICK_M: f64 = 0.1;
+            if max - min < MIN_LEVEL_SPAN_M {
+                let midpoint = (observed_min + observed_max) / 2.0;
+                min = midpoint - MIN_LEVEL_SPAN_M / 2.0;
+                max = midpoint + MIN_LEVEL_SPAN_M / 2.0;
+            }
+            let mut min_step = (min / LEVEL_TICK_M).floor() as i64;
+            let mut max_step = (max / LEVEL_TICK_M).ceil() as i64;
+            let minimum_steps = (MIN_LEVEL_SPAN_M / LEVEL_TICK_M).round() as i64;
+            if max_step - min_step < minimum_steps {
+                let midpoint_step =
+                    (((observed_min + observed_max) / 2.0) / LEVEL_TICK_M).round() as i64;
+                min_step = midpoint_step - minimum_steps / 2;
+                max_step = min_step + minimum_steps;
+            }
+            min = min_step as f64 * LEVEL_TICK_M;
+            max = max_step as f64 * LEVEL_TICK_M;
+            let axis = ValueAxis::bare(min, max);
+            let ticks = (min_step..=max_step)
+                .rev()
+                .map(|step| {
+                    let value = step as f64 * LEVEL_TICK_M;
+                    ValueTick {
+                        label: format!("{value:.1}"),
+                        value,
+                        position: value_position(value, &axis),
+                    }
+                })
+                .collect();
+            ValueAxis { ticks, ..axis }
+        }
     }
 }
 
@@ -1524,19 +1576,31 @@ fn discharge_reference_max(station: &StationData) -> f64 {
     observed.max(baseline)
 }
 
-fn discharge_safety(value: f64, reference_max: f64) -> DischargeSafety {
-    if value < reference_max / 3.0 {
+fn discharge_safety(station: &StationData, value: f64, reference_max: f64) -> DischargeSafety {
+    let (safe_limit, risky_limit) = discharge_safety_limits(station, reference_max);
+    if value < safe_limit {
         DischargeSafety::Safe
-    } else if value < reference_max * 2.0 / 3.0 {
+    } else if value < risky_limit {
         DischargeSafety::Risky
     } else {
         DischargeSafety::NoSwim
     }
 }
 
-fn discharge_risk_axis_segments(axis: &ValueAxis, reference_max: f64) -> Vec<RiskAxisSegment> {
-    let safe_limit = reference_max / 3.0;
-    let risky_limit = reference_max * 2.0 / 3.0;
+fn discharge_safety_limits(station: &StationData, reference_max: f64) -> (f64, f64) {
+    if station.id == "2170" {
+        (70.0, 200.0)
+    } else {
+        (reference_max / 3.0, reference_max * 2.0 / 3.0)
+    }
+}
+
+fn discharge_risk_axis_segments(
+    station: &StationData,
+    axis: &ValueAxis,
+    reference_max: f64,
+) -> Vec<RiskAxisSegment> {
+    let (safe_limit, risky_limit) = discharge_safety_limits(station, reference_max);
     [
         (DischargeSafety::Safe, axis.min, safe_limit),
         (DischargeSafety::Risky, safe_limit, risky_limit),
@@ -1569,6 +1633,7 @@ fn risk_axis_segment(
 }
 
 fn value_tick_class(
+    station: &StationData,
     kind: MetricKind,
     tick: &ValueTick,
     discharge_reference: Option<f64>,
@@ -1581,7 +1646,9 @@ fn value_tick_class(
     }
     if let Some(reference) = discharge_reference {
         if kind == MetricKind::Discharge {
-            classes.push(safety_class(discharge_safety(tick.value, reference)));
+            classes.push(safety_class(discharge_safety(
+                station, tick.value, reference,
+            )));
         }
     }
     classes.join(" ")
@@ -2086,6 +2153,9 @@ fn station_matches(station: &StationData, requested: &str) -> bool {
 }
 
 fn station_title(station: &StationData, locale: Locale) -> String {
+    if station.kind == WaterKind::Lake {
+        return tr(locale, "Lac Léman", "Lake Geneva").to_string();
+    }
     let title = match locale {
         Locale::Fr => station.role_fr.clone(),
         Locale::En => station.role_en.clone(),
@@ -2100,17 +2170,76 @@ fn station_metric_context(station: &StationData, locale: Locale) -> String {
             if title.starts_with("Arve") {
                 format!("Température et débit de l'{title}")
             } else if title.starts_with("Lac") {
-                format!("Température du {title}")
+                format!("Température et niveau du {title}")
             } else {
                 format!("Température et débit du {title}")
             }
+        }
+        Locale::En if station.kind == WaterKind::Lake => {
+            format!("Temperature and water level: {title}")
         }
         Locale::En => format!("Temperature and discharge: {title}"),
     }
 }
 
-fn station_tab_detail(locale: Locale) -> &'static str {
-    tr(locale, "Température et débit", "Temperature and discharge")
+fn station_tab_detail(station: &StationData, locale: Locale) -> &'static str {
+    if station.kind == WaterKind::Lake {
+        tr(
+            locale,
+            "Température et niveau",
+            "Temperature and water level",
+        )
+    } else {
+        tr(locale, "Température et débit", "Temperature and discharge")
+    }
+}
+
+fn station_with_lake_temperature(
+    mut station: StationData,
+    reference: Option<&StationData>,
+) -> StationData {
+    for current in &mut station.current {
+        if current.kind == MetricKind::WaterLevel {
+            current.unit = "m".to_string();
+        }
+    }
+    for history in &mut station.history {
+        if history.kind == MetricKind::WaterLevel {
+            history.unit = "m".to_string();
+        }
+    }
+
+    if station.kind != WaterKind::Lake
+        || series_for_kind(&station.history, MetricKind::Temperature).is_some()
+    {
+        return station;
+    }
+
+    let Some(reference) = reference else {
+        return station;
+    };
+
+    if let Some(mut current) = current_for_kind(reference, MetricKind::Temperature).cloned() {
+        current.label_fr = Some("Température du lac à l'exutoire".to_string());
+        current.label_en = Some("Lake temperature at the outflow".to_string());
+        station.current.push(current);
+    }
+    if let Some(mut history) = series_for_kind(&reference.history, MetricKind::Temperature).cloned()
+    {
+        history.label_fr = "Température du lac à l'exutoire".to_string();
+        history.label_en = "Lake temperature at the outflow".to_string();
+        station.history.push(history);
+    }
+    station.notice_fr = Some(
+        "Niveau mesuré à Sécheron; température mesurée à l'exutoire du lac, à la Halle de l'Île."
+            .to_string(),
+    );
+    station.notice_en = Some(
+        "Level measured at Sécheron; temperature measured at the lake outflow at Halle de l'Île."
+            .to_string(),
+    );
+
+    station
 }
 
 fn station_display_text(station: &StationData, text: String) -> String {
@@ -2375,7 +2504,17 @@ fn safety_class(safety: DischargeSafety) -> &'static str {
     }
 }
 
-fn safety_label(safety: DischargeSafety, locale: Locale) -> &'static str {
+fn safety_label(station: &StationData, safety: DischargeSafety, locale: Locale) -> &'static str {
+    if station.id == "2170" {
+        return match (safety, locale) {
+            (DischargeSafety::Safe, Locale::Fr) => "Courant faible",
+            (DischargeSafety::Safe, Locale::En) => "Weak current",
+            (DischargeSafety::Risky, Locale::Fr) => "Courant fort",
+            (DischargeSafety::Risky, Locale::En) => "Strong current",
+            (DischargeSafety::NoSwim, Locale::Fr) => "Attention courant très fort!",
+            (DischargeSafety::NoSwim, Locale::En) => "Warning! Very strong current!",
+        };
+    }
     match (safety, locale) {
         (DischargeSafety::Safe, Locale::Fr) => "Courant lent",
         (DischargeSafety::Safe, Locale::En) => "Slow current",
