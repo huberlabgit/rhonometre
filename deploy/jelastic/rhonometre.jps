@@ -2,7 +2,7 @@ type: install
 version: 1.0
 name: rhonometre
 displayName: rhonometre
-homepage: https://github.com/lcnbr/rhonometre
+homepage: https://github.com/huberlabgit/rhonometre
 description: |
   Deploy rhonometre on Infomaniak Jelastic with one application container and one PostgreSQL container.
 
@@ -15,7 +15,7 @@ settings:
     - type: string
       name: appImage
       caption: Application Docker image
-      default: ghcr.io/lcnbr/rhonometre:latest
+      default: ghcr.io/huberlabgit/rhonometre:latest
       required: true
 
     - type: string
@@ -47,6 +47,17 @@ settings:
       required: true
       regex: "^[A-Za-z0-9._~-]{32,256}$"
       regexText: "Use at least 32 URL-safe characters."
+
+    - type: string
+      name: imapUsername
+      caption: Infomaniak IMAP address (optional)
+      required: false
+
+    - type: string
+      inputType: password
+      name: imapPassword
+      caption: Infomaniak generated mailbox password (optional)
+      required: false
 
 nodes:
   - nodeType: docker
@@ -85,6 +96,12 @@ nodes:
       RHONOMETRE_PRO_CODE: "${settings.proCode}"
       RHONOMETRE_TOKEN_SECRET: "${settings.tokenSecret}"
       RHONOMETRE_PROGRAMME_DIR: "/data/programmes"
+      RHONOMETRE_IMAP_HOST: "mail.infomaniak.com"
+      RHONOMETRE_IMAP_PORT: "993"
+      RHONOMETRE_IMAP_USERNAME: "${settings.imapUsername}"
+      RHONOMETRE_IMAP_PASSWORD: "${settings.imapPassword}"
+      RHONOMETRE_IMAP_MAILBOX: "INBOX"
+      RHONOMETRE_IMAP_POLL_SECONDS: "300"
 
 startPage: "${env.url}"
 

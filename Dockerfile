@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN rustup target add wasm32-unknown-unknown \
     && apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates \
+    && apt-get install -y --no-install-recommends cmake perl pkg-config libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && cargo install trunk --locked \
     && cargo install wasm-bindgen-cli --version 0.2.125 --locked

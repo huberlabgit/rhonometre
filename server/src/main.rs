@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     env, fs,
     io::Cursor,
     net::{IpAddr, SocketAddr},
@@ -24,6 +24,14 @@ use chrono::{
 };
 use futures_util::stream;
 use hmac::{Hmac, KeyInit, Mac};
+use imap_rs::{
+    client::{
+        flags::{Flag, StoreAction},
+        search::{SearchKey, SearchQuery},
+    },
+    connect_tls,
+    credentials::Password,
+};
 use mailparse::parse_mail;
 use mailparse::MailHeaderMap;
 use reqwest::Client;
@@ -44,8 +52,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const HYDRO_PQ_URL: &str = "https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_pq.geojson";
 const HYDRO_TEMPERATURE_URL: &str =
     "https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_temperature.geojson";
-const HYDRO_PQ_FORECAST_URL: &str =
-    "https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_pq_forecast.geojson";
 const HYDRO_BASE_URL: &str = "https://www.hydrodaten.admin.ch";
 const OPEN_METEO_URL: &str = "https://api.open-meteo.com/v1/forecast";
 const CACHE_TTL: Duration = Duration::from_secs(120);
@@ -67,6 +73,12 @@ const DATABASE_CONNECT_RETRY_SECONDS_ENV: &str = "RHONOMETRE_DATABASE_CONNECT_RE
 const INGEST_TOKEN_ENV: &str = "RHONOMETRE_INGEST_TOKEN";
 const PRO_CODE_ENV: &str = "RHONOMETRE_PRO_CODE";
 const TOKEN_SECRET_ENV: &str = "RHONOMETRE_TOKEN_SECRET";
+const IMAP_HOST_ENV: &str = "RHONOMETRE_IMAP_HOST";
+const IMAP_PORT_ENV: &str = "RHONOMETRE_IMAP_PORT";
+const IMAP_USERNAME_ENV: &str = "RHONOMETRE_IMAP_USERNAME";
+const IMAP_PASSWORD_ENV: &str = "RHONOMETRE_IMAP_PASSWORD";
+const IMAP_MAILBOX_ENV: &str = "RHONOMETRE_IMAP_MAILBOX";
+const IMAP_POLL_SECONDS_ENV: &str = "RHONOMETRE_IMAP_POLL_SECONDS";
 const HOST_ENV: &str = "HOST";
 const DEFAULT_PRO_CODE: &str = "rhonometre";
 const PRO_TOKEN_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
@@ -131,6 +143,45 @@ struct AppState {
     ingest_token: Option<String>,
     pro_code: String,
     token_secret: String,
+    imap_status: Arc<RwLock<ImapStatus>>,
+}
+
+struct ImapConfig {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    mailbox: String,
+    poll_interval: Duration,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ImapStatus {
+    configured: bool,
+    running: bool,
+    host: Option<String>,
+    username: Option<String>,
+    mailbox: Option<String>,
+    last_poll_at: Option<String>,
+    last_success_at: Option<String>,
+    last_error: Option<String>,
+    messages_ingested: u64,
+}
+
+impl Default for ImapStatus {
+    fn default() -> Self {
+        Self {
+            configured: false,
+            running: false,
+            host: None,
+            username: None,
+            mailbox: None,
+            last_poll_at: None,
+            last_success_at: None,
+            last_error: None,
+            messages_ingested: 0,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -430,8 +481,6 @@ enum FetchError {
     StationNotFound(&'static str, &'static str),
     #[error("history for station {0} did not contain usable data")]
     EmptyHistory(&'static str),
-    #[error("forecast for station {0} did not contain usable discharge data")]
-    EmptyForecast(&'static str),
 }
 
 #[tokio::main]
@@ -464,6 +513,15 @@ async fn main() {
         ingest_token,
         pro_code,
         token_secret,
+        imap_status: Arc::new(RwLock::new(ImapStatus::default())),
+    };
+
+    let imap_config = match imap_config_from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            warn!(error = %err, "IMAP programme ingestion is disabled");
+            None
+        }
     };
 
     if let Some(db) = state.db.as_ref() {
@@ -501,6 +559,7 @@ async fn main() {
         .route("/api/v1/stations/{id}/series", get(station_series_handler))
         .route("/api/v1/auth/pro", post(pro_auth_handler))
         .route("/api/admin/email-ingest", post(email_ingest_handler))
+        .route("/api/admin/imap-status", get(imap_status_handler))
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .route("/healthz", get(healthz))
@@ -515,6 +574,13 @@ async fn main() {
     info!(%addr, %static_dir, "serving rhonometre");
 
     tokio::spawn(refresh_loop(state.clone()));
+    if let Some(config) = imap_config {
+        if state.db.is_some() {
+            tokio::spawn(imap_ingest_loop(state.clone(), config));
+        } else {
+            warn!("IMAP programme ingestion requires DATABASE_URL and is disabled");
+        }
+    }
 
     axum::serve(listener, app).await.expect("server failed");
 }
@@ -651,8 +717,211 @@ async fn refresh_loop(state: AppState) {
     }
 }
 
+fn imap_config_from_env() -> Result<Option<ImapConfig>, String> {
+    let username = env::var(IMAP_USERNAME_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let password = env::var(IMAP_PASSWORD_ENV)
+        .ok()
+        .filter(|value| !value.is_empty());
+    match (username, password) {
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(format!("{IMAP_PASSWORD_ENV} is required")),
+        (None, Some(_)) => Err(format!("{IMAP_USERNAME_ENV} is required")),
+        (Some(username), Some(password)) => {
+            let host =
+                env::var(IMAP_HOST_ENV).unwrap_or_else(|_| "mail.infomaniak.com".to_string());
+            let port = env::var(IMAP_PORT_ENV)
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(993);
+            let mailbox = env::var(IMAP_MAILBOX_ENV).unwrap_or_else(|_| "INBOX".to_string());
+            let poll_seconds = env::var(IMAP_POLL_SECONDS_ENV)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(300)
+                .max(30);
+            Ok(Some(ImapConfig {
+                host,
+                port,
+                username,
+                password,
+                mailbox,
+                poll_interval: Duration::from_secs(poll_seconds),
+            }))
+        }
+    }
+}
+
+async fn imap_ingest_loop(state: AppState, config: ImapConfig) {
+    {
+        let mut status = state.imap_status.write().await;
+        status.configured = true;
+        status.running = true;
+        status.host = Some(config.host.clone());
+        status.username = Some(config.username.clone());
+        status.mailbox = Some(config.mailbox.clone());
+    }
+    info!(
+        host = %config.host,
+        port = config.port,
+        username = %config.username,
+        mailbox = %config.mailbox,
+        poll_seconds = config.poll_interval.as_secs(),
+        "starting secure IMAP programme ingestion"
+    );
+    let mut poll_count = 0_u64;
+    loop {
+        let scan_all = poll_count % 12 == 0;
+        state.imap_status.write().await.last_poll_at =
+            Some(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
+        let result = poll_imap_programmes(&state, &config, scan_all).await;
+        match &result {
+            Ok(processed) if *processed > 0 => {
+                info!(processed, "ingested SIG programme email messages");
+                *state.cache.write().await = None;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warn!(error = %err, "IMAP programme poll failed");
+            }
+        }
+        {
+            let mut status = state.imap_status.write().await;
+            apply_imap_poll_result(
+                &mut status,
+                &result,
+                Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            );
+        }
+        poll_count = poll_count.wrapping_add(1);
+        sleep(config.poll_interval).await;
+    }
+}
+
+fn apply_imap_poll_result(
+    status: &mut ImapStatus,
+    result: &Result<usize, String>,
+    completed_at: String,
+) {
+    match result {
+        Ok(processed) => {
+            status.last_success_at = Some(completed_at);
+            status.last_error = None;
+            status.messages_ingested = status
+                .messages_ingested
+                .saturating_add(u64::try_from(*processed).unwrap_or_default());
+        }
+        Err(err) => status.last_error = Some(err.clone()),
+    }
+}
+
+async fn poll_imap_programmes(
+    state: &AppState,
+    config: &ImapConfig,
+    scan_all: bool,
+) -> Result<usize, String> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| "Postgres storage is not configured".to_string())?;
+    let session = connect_tls(&config.host, config.port)
+        .await
+        .map_err(|err| format!("connect to {}:{}: {err}", config.host, config.port))?;
+    let authenticated = session
+        .login(&config.username, Password::new(&config.password))
+        .await
+        .map_err(|err| format!("authenticate {}: {err}", config.username))?;
+    let mut inbox = authenticated
+        .select(&config.mailbox)
+        .await
+        .map_err(|err| format!("select mailbox {}: {err}", config.mailbox))?;
+    let search_key = if scan_all {
+        SearchKey::And(vec![SearchKey::All, SearchKey::Undeleted])
+    } else {
+        SearchKey::And(vec![SearchKey::Unseen, SearchKey::Undeleted])
+    };
+    let message_ids = inbox
+        .search(SearchQuery::new(search_key))
+        .await
+        .map_err(|err| format!("search unread messages: {err}"))?;
+    let mut processed = 0usize;
+
+    for sequence in message_ids
+        .into_iter()
+        .rev()
+        .take(50)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let sequence_set = sequence.to_string();
+        let fetched = inbox
+            .fetch(&sequence_set, "BODY.PEEK[]")
+            .await
+            .map_err(|err| format!("fetch message {sequence}: {err}"))?;
+        let Some(body) = fetched.first().and_then(|message| message.body.as_ref()) else {
+            warn!(sequence, "IMAP message did not include an RFC822 body");
+            continue;
+        };
+
+        match ingest_request_bytes(db, &format!("imap-message-{sequence}.eml"), body.clone()).await
+        {
+            Ok(response) => {
+                inbox
+                    .store(&sequence_set, StoreAction::Add, &[Flag::Seen])
+                    .await
+                    .map_err(|err| format!("mark message {sequence} as seen: {err}"))?;
+                if !response.duplicate {
+                    info!(
+                        sequence,
+                        id = %response.id,
+                        parsed_points = response.parsed_points,
+                        "ingested IMAP programme message"
+                    );
+                    processed += 1;
+                }
+            }
+            Err(err) => {
+                warn!(
+                    sequence,
+                    error = %err,
+                    "unread IMAP message was not a usable SIG programme and remains unread"
+                );
+            }
+        }
+    }
+
+    inbox
+        .logout()
+        .await
+        .map_err(|err| format!("logout from IMAP: {err}"))?;
+    Ok(processed)
+}
+
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn imap_status_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let Some(expected_token) = state.ingest_token.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "RHONOMETRE_INGEST_TOKEN is not configured" })),
+        )
+            .into_response();
+    };
+    if bearer_token(&headers) != Some(expected_token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid ingest token" })),
+        )
+            .into_response();
+    }
+    (StatusCode::OK, Json(state.imap_status.read().await.clone())).into_response()
 }
 
 async fn api_not_found() -> impl IntoResponse {
@@ -685,7 +954,9 @@ async fn dashboard_v1_handler(
 ) -> impl IntoResponse {
     match dashboard_data(&state).await {
         Ok(mut data) => {
-            if !is_authorized_pro(&headers, &state) {
+            if is_authorized_pro(&headers, &state) {
+                retain_pro_forecasts(&mut data);
+            } else {
                 strip_forecasts(&mut data);
             }
             (StatusCode::OK, Json(data)).into_response()
@@ -852,6 +1123,14 @@ async fn load_station_series(
           AND timestamp >= $3
           AND timestamp <= $4
           AND ($5::text IS NULL OR kind = $5)
+          AND (
+              $6::boolean = false
+              OR source IN (
+                  'sig_programme_hourly',
+                  'sig_programme_daily',
+                  'sig_programme'
+              )
+          )
         ORDER BY kind, source, timestamp
         "#,
     )
@@ -860,6 +1139,7 @@ async fn load_station_series(
     .bind(from)
     .bind(to)
     .bind(kind_filter)
+    .bind(include_forecast)
     .fetch_all(db)
     .await?;
 
@@ -899,6 +1179,18 @@ async fn load_station_series(
 fn strip_forecasts(data: &mut DashboardData) {
     for station in &mut data.stations {
         station.forecast.clear();
+    }
+}
+
+fn retain_pro_forecasts(data: &mut DashboardData) {
+    for station in &mut data.stations {
+        if station.id == DERIVED_HALLE_ILE_STATION.id {
+            station
+                .forecast
+                .retain(|series| series.kind == MetricKind::Discharge);
+        } else {
+            station.forecast.clear();
+        }
     }
 }
 
@@ -1030,17 +1322,6 @@ async fn fetch_dashboard(
         },
         None => load_programme_forecasts(&mut warnings),
     };
-    let forecast_by_station = match fetch_features(client, HYDRO_PQ_FORECAST_URL).await {
-        Ok(features) => Some(features_by_station(features)),
-        Err(err) => {
-            warn!(error = %err, "failed to fetch forecast station overview");
-            warnings.push(format!(
-                "Could not refresh Hydrodaten discharge forecast overview: {err}"
-            ));
-            None
-        }
-    };
-
     for station in SOURCE_STATIONS {
         stations.push(
             fetch_hydrodaten_station_data(
@@ -1048,7 +1329,6 @@ async fn fetch_dashboard(
                 station,
                 &pq_by_station,
                 &temperature_by_station,
-                forecast_by_station.as_ref(),
                 &mut warnings,
             )
             .await?,
@@ -1060,7 +1340,6 @@ async fn fetch_dashboard(
         &HALLE_ILE_STATION,
         &pq_by_station,
         &temperature_by_station,
-        forecast_by_station.as_ref(),
         &mut warnings,
     )
     .await
@@ -1165,7 +1444,6 @@ async fn fetch_hydrodaten_station_data(
     station: &StationConfig,
     pq_by_station: &HashMap<String, Feature>,
     temperature_by_station: &HashMap<String, Feature>,
-    forecast_by_station: Option<&HashMap<String, Feature>>,
     warnings: &mut Vec<String>,
 ) -> Result<StationData, FetchError> {
     let pq_feature = pq_by_station
@@ -1205,20 +1483,6 @@ async fn fetch_hydrodaten_station_data(
         }
     }
 
-    let mut forecast = Vec::new();
-    if forecast_by_station.is_some_and(|features| features.contains_key(station.id)) {
-        match fetch_discharge_forecast(client, station).await {
-            Ok(series) => forecast.push(series),
-            Err(err) => {
-                warn!(station = station.id, error = %err, "failed to fetch discharge forecast");
-                warnings.push(format!(
-                    "Could not refresh discharge forecast for {}: {err}",
-                    station.id
-                ));
-            }
-        }
-    }
-
     let status = match (current.is_empty(), history.is_empty()) {
         (false, false) => StationStatus::Complete,
         (false, true) | (true, false) => StationStatus::Partial,
@@ -1235,7 +1499,7 @@ async fn fetch_hydrodaten_station_data(
         kind: station.kind,
         current,
         history,
-        forecast,
+        forecast: Vec::new(),
         status,
         source: StationDataSource::Hydrodaten,
         notice_fr: None,
@@ -1254,10 +1518,10 @@ fn apply_seujet_programme_forecast(
     station: &mut StationData,
     seujet_programme_forecast: Option<&MetricSeries>,
 ) {
+    station
+        .forecast
+        .retain(|forecast| forecast.kind != MetricKind::Discharge);
     if let Some(series) = seujet_programme_forecast {
-        station
-            .forecast
-            .retain(|forecast| forecast.kind != MetricKind::Discharge);
         station.forecast.push(series.clone());
     }
 }
@@ -1298,8 +1562,6 @@ fn derive_halle_ile_station(
     let mut forecast = Vec::new();
     if let Some(series) = seujet_programme_forecast {
         forecast.push(series.clone());
-    } else if let Some(series) = derive_discharge_forecast(arve, chancy) {
-        forecast.push(series);
     }
 
     if current.is_empty() && history.is_empty() {
@@ -1346,11 +1608,15 @@ async fn ingest_request_body(
     };
 
     let request_hash = content_hash(&body);
+    if let Some(response) = existing_ingest_response(db, &request_hash).await? {
+        return Ok(response);
+    }
     let mut total_points = 0usize;
     let mut all_warnings = Vec::new();
     let mut all_attachments = Vec::new();
     let mut subject = None;
     let mut all_points = BTreeMap::new();
+    let mut hourly_dates = HashSet::new();
 
     for (name, bytes) in blobs {
         let metadata = programme_payload_metadata(&name, &bytes);
@@ -1359,7 +1625,12 @@ async fn ingest_request_body(
         }
         all_attachments.extend(metadata.attachments);
 
-        match parse_programme_source_bytes(&name, &bytes, &mut all_points) {
+        match parse_programme_source_bytes_detailed(
+            &name,
+            &bytes,
+            &mut all_points,
+            &mut hourly_dates,
+        ) {
             Ok(points) => total_points += points,
             Err(err) => all_warnings.push(format!("{name}: {err}")),
         }
@@ -1372,7 +1643,7 @@ async fn ingest_request_body(
         ));
     }
 
-    upsert_sig_programme_points(db, &all_points).await?;
+    upsert_sig_programme_points(db, &all_points, &hourly_dates).await?;
     let duplicate = store_ingest_event(
         db,
         &request_hash,
@@ -1469,14 +1740,16 @@ fn programme_payload_metadata(name: &str, bytes: &[u8]) -> ProgrammePayloadMetad
 async fn upsert_sig_programme_points(
     db: &PgPool,
     points: &BTreeMap<DateTime<FixedOffset>, f64>,
+    hourly_dates: &HashSet<NaiveDate>,
 ) -> Result<(), String> {
     for (timestamp, value) in points {
+        let source = sig_programme_source(timestamp.date_naive(), hourly_dates);
         upsert_station_point(
             db,
             DERIVED_HALLE_ILE_STATION.id,
             MetricKind::Discharge,
             "forecast",
-            "sig_programme",
+            source,
             timestamp.with_timezone(&Utc),
             *value,
             "m³/s",
@@ -1549,22 +1822,27 @@ async fn ingest_request_bytes(
     bytes: Vec<u8>,
 ) -> Result<IngestResponse, String> {
     let request_hash = content_hash(&bytes);
+    if let Some(response) = existing_ingest_response(db, &request_hash).await? {
+        return Ok(response);
+    }
     let metadata = programme_payload_metadata(name, &bytes);
     let mut points = BTreeMap::new();
+    let mut hourly_dates = HashSet::new();
     let mut warnings = Vec::new();
-    let parsed_points = match parse_programme_source_bytes(name, &bytes, &mut points) {
-        Ok(points) => points,
-        Err(err) => {
-            warnings.push(err);
-            0
-        }
-    };
+    let parsed_points =
+        match parse_programme_source_bytes_detailed(name, &bytes, &mut points, &mut hourly_dates) {
+            Ok(points) => points,
+            Err(err) => {
+                warnings.push(err);
+                0
+            }
+        };
 
     if points.is_empty() {
         return Err(format!("{name} did not contain usable Q Seujet points"));
     }
 
-    upsert_sig_programme_points(db, &points).await?;
+    upsert_sig_programme_points(db, &points, &hourly_dates).await?;
     let duplicate = store_ingest_event(
         db,
         &request_hash,
@@ -1581,6 +1859,25 @@ async fn ingest_request_bytes(
         duplicate,
         warnings,
     })
+}
+
+async fn existing_ingest_response(db: &PgPool, id: &str) -> Result<Option<IngestResponse>, String> {
+    let existing = sqlx::query_as::<_, (i32, Value)>(
+        "SELECT parsed_points, warnings FROM ingest_events WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+    .map_err(|err| err.to_string())?;
+    let Some((parsed_points, warnings)) = existing else {
+        return Ok(None);
+    };
+    Ok(Some(IngestResponse {
+        id: id.to_string(),
+        parsed_points: usize::try_from(parsed_points).unwrap_or_default(),
+        duplicate: true,
+        warnings: serde_json::from_value(warnings).unwrap_or_default(),
+    }))
 }
 
 fn load_programme_forecasts(warnings: &mut Vec<String>) -> ProgrammeForecasts {
@@ -1629,6 +1926,12 @@ fn load_programme_forecasts(warnings: &mut Vec<String>) -> ProgrammeForecasts {
         point_count = seujet_points.len(),
         "loaded SIG discharge programme"
     );
+    let today = geneva_today();
+    seujet_points.retain(|timestamp, _| is_visible_forecast_date(today, timestamp.date_naive()));
+
+    if seujet_points.is_empty() {
+        return ProgrammeForecasts::default();
+    }
 
     ProgrammeForecasts {
         seujet: Some(MetricSeries {
@@ -1652,13 +1955,36 @@ async fn load_programme_forecasts_from_db(db: &PgPool) -> Result<ProgrammeForeca
     let rows = sqlx::query_as::<_, (DateTime<Utc>, f64)>(
         r#"
         SELECT timestamp, value
-        FROM station_series
-        WHERE station_id = '2606'
-          AND kind = 'discharge'
-          AND series_role = 'forecast'
-          AND source = 'sig_programme'
-          AND timestamp >= now() - interval '5 days'
-          AND timestamp <= now() + interval '14 days'
+        FROM (
+            SELECT DISTINCT ON (timestamp)
+                timestamp,
+                value
+            FROM station_series
+            WHERE station_id = '2606'
+              AND kind = 'discharge'
+              AND series_role = 'forecast'
+              AND source IN (
+                  'sig_programme_hourly',
+                  'sig_programme_daily',
+                  'sig_programme'
+              )
+              AND timestamp >= (
+                  date_trunc('day', now() AT TIME ZONE 'Europe/Zurich')
+                  + interval '1 day'
+              ) AT TIME ZONE 'Europe/Zurich'
+              AND timestamp < (
+                  date_trunc('day', now() AT TIME ZONE 'Europe/Zurich')
+                  + interval '4 days'
+              ) AT TIME ZONE 'Europe/Zurich'
+            ORDER BY
+                timestamp,
+                CASE source
+                    WHEN 'sig_programme_hourly' THEN 0
+                    WHEN 'sig_programme_daily' THEN 1
+                    ELSE 2
+                END,
+                updated_at DESC
+        ) preferred
         ORDER BY timestamp
         "#,
     )
@@ -1714,15 +2040,6 @@ async fn persist_dashboard(db: &PgPool, data: &DashboardData) -> Result<(), sqlx
         for series in &station.history {
             let source = station_data_source_key(station.source);
             persist_metric_series(db, station.id, "history", source, series).await?;
-        }
-
-        for series in &station.forecast {
-            let source = if series.label_en == "SIG Seujet programme" {
-                "sig_programme"
-            } else {
-                station_data_source_key(station.source)
-            };
-            persist_metric_series(db, station.id, "forecast", source, series).await?;
         }
     }
 
@@ -1938,12 +2255,34 @@ fn parse_programme_source_bytes(
     bytes: &[u8],
     seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
 ) -> Result<usize, String> {
+    parse_programme_source_bytes_detailed(name, bytes, seujet_points, &mut HashSet::new())
+}
+
+fn parse_programme_source_bytes_detailed(
+    name: &str,
+    bytes: &[u8],
+    seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+    hourly_dates: &mut HashSet<NaiveDate>,
+) -> Result<usize, String> {
     if is_workbook_name(name) {
-        return parse_programme_workbook_bytes(name, bytes, seujet_points);
+        return parse_programme_workbook_bytes(
+            name,
+            bytes,
+            date_from_text(name),
+            seujet_points,
+            hourly_dates,
+        );
     }
 
-    parse_programme_mail_bytes(name, bytes, seujet_points).or_else(|mail_err| {
-        parse_programme_workbook_bytes(name, bytes, seujet_points).map_err(|workbook_err| {
+    parse_programme_mail_bytes(name, bytes, seujet_points, hourly_dates).or_else(|mail_err| {
+        parse_programme_workbook_bytes(
+            name,
+            bytes,
+            date_from_text(name),
+            seujet_points,
+            hourly_dates,
+        )
+        .map_err(|workbook_err| {
             format!("not a readable programme email ({mail_err}) or workbook ({workbook_err})")
         })
     })
@@ -1964,8 +2303,14 @@ fn parse_programme_mail_bytes(
     name: &str,
     bytes: &[u8],
     seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+    hourly_dates: &mut HashSet<NaiveDate>,
 ) -> Result<usize, String> {
     let mail = parse_mail(bytes).map_err(|err| err.to_string())?;
+    let message_date = mail
+        .headers
+        .get_first_value("Subject")
+        .as_deref()
+        .and_then(date_from_text);
     let mut point_count = 0usize;
     let mut attachment_errors = Vec::new();
 
@@ -1986,7 +2331,14 @@ fn parse_programme_mail_bytes(
         let attachment = part
             .get_body_raw()
             .map_err(|err| format!("failed to decode attachment {attachment_name}: {err}"))?;
-        match parse_programme_workbook_bytes(&attachment_name, &attachment, seujet_points) {
+        let attachment_date = date_from_text(&attachment_name).or(message_date);
+        match parse_programme_workbook_bytes(
+            &attachment_name,
+            &attachment,
+            attachment_date,
+            seujet_points,
+            hourly_dates,
+        ) {
             Ok(points) => point_count += points,
             Err(err) => attachment_errors.push(format!("{attachment_name}: {err}")),
         }
@@ -2019,7 +2371,9 @@ fn is_excel_attachment(filename: Option<&str>, mimetype: &str) -> bool {
 fn parse_programme_workbook_bytes(
     name: &str,
     bytes: &[u8],
+    fallback_date: Option<NaiveDate>,
     seujet_points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+    hourly_dates: &mut HashSet<NaiveDate>,
 ) -> Result<usize, String> {
     let cursor = Cursor::new(bytes.to_vec());
     let mut workbook =
@@ -2030,32 +2384,82 @@ fn parse_programme_workbook_bytes(
         let range = workbook
             .worksheet_range(&sheet_name)
             .map_err(|err| format!("read worksheet {sheet_name}: {err}"))?;
-        point_count += collect_hourly_programme_points(&range, "Q Seujet", seujet_points);
+        point_count += collect_programme_points(&range, fallback_date, seujet_points, hourly_dates);
     }
 
     if point_count == 0 {
         return Err(format!(
-            "{name} did not contain Q Seujet hourly programme points"
+            "{name} did not contain Q Seujet or Seujet daily-average programme points"
         ));
     }
 
     Ok(point_count)
 }
 
-fn collect_hourly_programme_points(
+fn collect_programme_points(
     range: &Range<Data>,
-    series_label: &str,
+    fallback_date: Option<NaiveDate>,
     points: &mut BTreeMap<DateTime<FixedOffset>, f64>,
+    hourly_dates: &mut HashSet<NaiveDate>,
 ) -> usize {
     let rows = range.rows().collect::<Vec<_>>();
+    let workbook_date = fallback_date.or_else(|| {
+        rows.iter()
+            .take(30)
+            .flat_map(|row| row.iter())
+            .find_map(cell_date)
+    });
     let mut point_count = 0usize;
+    let mut daily_index = 0_i64;
 
-    for (row_idx, row) in rows.iter().enumerate() {
-        if !row_contains_label(row, series_label) {
+    for row in &rows {
+        if !row_contains_label(row, "Seujet débit moyen journalier") {
             continue;
         }
 
-        let Some(date) = row.iter().find_map(cell_date) else {
+        daily_index += 1;
+        let explicit_date = row.iter().find_map(cell_date);
+        let date = explicit_date
+            .or_else(|| workbook_date?.checked_add_signed(chrono::Duration::days(daily_index)));
+        let Some(date) = date else {
+            continue;
+        };
+        let Some(label_index) = row.iter().position(|cell| {
+            cell_text(cell)
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|text| text.eq_ignore_ascii_case("Seujet débit moyen journalier"))
+        }) else {
+            continue;
+        };
+        let Some(value) = row
+            .iter()
+            .skip(label_index + 1)
+            .filter_map(cell_number)
+            .find(|value| (0.0..=5_000.0).contains(value))
+        else {
+            continue;
+        };
+
+        for hour in 0..24 {
+            if let Some(timestamp) = geneva_datetime(date, hour) {
+                points.entry(timestamp).or_insert(value);
+                point_count += 1;
+            }
+        }
+    }
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        if !row_contains_label(row, "Q Seujet") {
+            continue;
+        }
+
+        let Some(date) = row
+            .iter()
+            .find_map(cell_date)
+            .or_else(|| find_nearby_date(&rows, row_idx))
+            .or(workbook_date)
+        else {
             continue;
         };
         let Some(headers) = find_time_headers(&rows, row_idx) else {
@@ -2064,6 +2468,7 @@ fn collect_hourly_programme_points(
         let Some(midnight_idx) = headers.iter().position(|(_, hour)| *hour == 0) else {
             continue;
         };
+        hourly_dates.insert(date);
 
         for (column_idx, hour) in headers.iter().skip(midnight_idx).take(24) {
             let Some(value) = row.get(*column_idx).and_then(cell_number) else {
@@ -2078,6 +2483,25 @@ fn collect_hourly_programme_points(
     }
 
     point_count
+}
+
+fn find_nearby_date(rows: &[&[Data]], row_idx: usize) -> Option<NaiveDate> {
+    for distance in 1..=20 {
+        if let Some(date) = row_idx
+            .checked_sub(distance)
+            .and_then(|index| rows.get(index))
+            .and_then(|row| row.iter().find_map(cell_date))
+        {
+            return Some(date);
+        }
+        if let Some(date) = rows
+            .get(row_idx + distance)
+            .and_then(|row| row.iter().find_map(cell_date))
+        {
+            return Some(date);
+        }
+    }
+    None
 }
 
 fn find_time_headers(rows: &[&[Data]], row_idx: usize) -> Option<Vec<(usize, u32)>> {
@@ -2129,21 +2553,58 @@ fn cell_number(cell: &Data) -> Option<f64> {
 fn cell_date(cell: &Data) -> Option<NaiveDate> {
     match cell {
         Data::DateTime(value) => excel_datetime_date(*value),
-        Data::Float(value) => excel_datetime_date(ExcelDateTime::new(
+        Data::Float(value) if *value >= 20_000.0 => excel_datetime_date(ExcelDateTime::new(
             *value,
             ExcelDateTimeType::DateTime,
             false,
         )),
-        Data::Int(value) => excel_datetime_date(ExcelDateTime::new(
+        Data::Int(value) if *value >= 20_000 => excel_datetime_date(ExcelDateTime::new(
             *value as f64,
             ExcelDateTimeType::DateTime,
             false,
         )),
-        Data::String(value) => NaiveDate::parse_from_str(value.trim(), "%d.%m.%Y")
-            .or_else(|_| NaiveDate::parse_from_str(value.trim(), "%d/%m/%Y"))
-            .ok(),
+        Data::String(value) => date_from_text(value),
         _ => None,
     }
+}
+
+fn date_from_text(value: &str) -> Option<NaiveDate> {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_digit() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+    let parts = normalized
+        .split_whitespace()
+        .filter_map(|part| part.parse::<i32>().ok())
+        .collect::<Vec<_>>();
+
+    for window in parts.windows(3) {
+        let (first, second, third) = (window[0], window[1], window[2]);
+        if first >= 1_900 {
+            if let Some(date) = NaiveDate::from_ymd_opt(
+                first,
+                u32::try_from(second).ok()?,
+                u32::try_from(third).ok()?,
+            ) {
+                return Some(date);
+            }
+        } else if third >= 1_900 {
+            if let Some(date) = NaiveDate::from_ymd_opt(
+                third,
+                u32::try_from(second).ok()?,
+                u32::try_from(first).ok()?,
+            ) {
+                return Some(date);
+            }
+        }
+    }
+    None
 }
 
 fn excel_datetime_date(value: ExcelDateTime) -> Option<NaiveDate> {
@@ -2176,6 +2637,26 @@ fn geneva_offset(date: NaiveDate) -> FixedOffset {
         60 * 60
     };
     FixedOffset::east_opt(seconds).expect("valid Geneva UTC offset")
+}
+
+fn geneva_today() -> NaiveDate {
+    let utc_now = Utc::now();
+    let first_pass = utc_now.with_timezone(&geneva_offset(utc_now.date_naive()));
+    first_pass
+        .with_timezone(&geneva_offset(first_pass.date_naive()))
+        .date_naive()
+}
+
+fn is_visible_forecast_date(today: NaiveDate, date: NaiveDate) -> bool {
+    date > today && date <= today + chrono::Duration::days(3)
+}
+
+fn sig_programme_source(date: NaiveDate, hourly_dates: &HashSet<NaiveDate>) -> &'static str {
+    if hourly_dates.contains(&date) {
+        "sig_programme_hourly"
+    } else {
+        "sig_programme_daily"
+    }
 }
 
 fn last_sunday(year: i32, month: u32) -> NaiveDate {
@@ -2249,10 +2730,6 @@ fn current_metric(station: &StationData, kind: MetricKind) -> Option<&CurrentMet
 
 fn history_series(station: &StationData, kind: MetricKind) -> Option<&MetricSeries> {
     station.history.iter().find(|series| series.kind == kind)
-}
-
-fn forecast_series(station: &StationData, kind: MetricKind) -> Option<&MetricSeries> {
-    station.forecast.iter().find(|series| series.kind == kind)
 }
 
 fn derive_current_discharge(arve: &StationData, chancy: &StationData) -> Option<CurrentMetric> {
@@ -2387,33 +2864,6 @@ fn derive_discharge_history(arve: &StationData, chancy: &StationData) -> Option<
         kind: MetricKind::Discharge,
         label_fr: "Débit calculé",
         label_en: "Derived discharge",
-        unit: "m³/s".to_string(),
-        points,
-        uncertainty: None,
-    })
-}
-
-fn derive_discharge_forecast(arve: &StationData, chancy: &StationData) -> Option<MetricSeries> {
-    let arve_discharge = forecast_series(arve, MetricKind::Discharge)?;
-    let chancy_discharge = forecast_series(chancy, MetricKind::Discharge)?;
-    let arve_by_time = series_map(arve_discharge);
-    let points = chancy_discharge
-        .points
-        .iter()
-        .filter_map(|point| {
-            let arve_value = arve_by_time.get(&point.timestamp)?;
-            let value = point.value - arve_value;
-            (value > 0.0).then(|| HistoryPoint {
-                timestamp: point.timestamp.clone(),
-                value,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    (!points.is_empty()).then(|| MetricSeries {
-        kind: MetricKind::Discharge,
-        label_fr: "Prévision du débit calculé",
-        label_en: "Derived discharge forecast",
         unit: "m³/s".to_string(),
         points,
         uncertainty: None,
@@ -2984,30 +3434,6 @@ async fn fetch_temperature_history_window(
     fetch_history(client, station, &url, days).await
 }
 
-async fn fetch_discharge_forecast(
-    client: &Client,
-    station: &StationConfig,
-) -> Result<MetricSeries, FetchError> {
-    let url = format!(
-        "{HYDRO_BASE_URL}/plots/q_forecast/{id}_q_forecast_de.json",
-        id = station.id
-    );
-    let envelope = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<PlotEnvelope>()
-        .await?;
-
-    envelope
-        .plot
-        .data
-        .into_iter()
-        .find_map(parse_discharge_forecast_trace)
-        .ok_or(FetchError::EmptyForecast(station.id))
-}
-
 async fn fetch_air_temperature(client: &Client) -> Result<AirTemperatureData, FetchError> {
     let response = client
         .get(OPEN_METEO_URL)
@@ -3125,37 +3551,6 @@ async fn fetch_history(
     }
 
     Ok(series)
-}
-
-fn parse_discharge_forecast_trace(trace: PlotTrace) -> Option<MetricSeries> {
-    if !trace.name.to_lowercase().contains("median") {
-        return None;
-    }
-
-    let unit = trace
-        .meta
-        .and_then(|meta| meta.unit)
-        .unwrap_or_else(|| default_unit(&MetricKind::Discharge).to_string());
-    let points = trace
-        .x
-        .into_iter()
-        .zip(trace.y)
-        .filter_map(|(timestamp, value)| {
-            Some(HistoryPoint {
-                timestamp,
-                value: value?,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    (!points.is_empty()).then(|| MetricSeries {
-        kind: MetricKind::Discharge,
-        label_fr: "Prévision du débit",
-        label_en: "Discharge forecast",
-        unit,
-        points,
-        uncertainty: None,
-    })
 }
 
 fn parse_trace(trace: PlotTrace) -> Option<MetricSeries> {
@@ -3342,6 +3737,183 @@ mod tests {
     }
 
     #[test]
+    fn parses_title_date_and_daily_average_fallbacks() {
+        let workbook = synthetic_programme_workbook_with_sheet(&programme_sheet_xml(
+            "20.06.2026",
+            100,
+            &[230, 240],
+        ));
+        let mut points = BTreeMap::new();
+
+        let count = parse_programme_source_bytes("programme.xlsx", &workbook, &mut points)
+            .expect("programme with title date and daily averages should parse");
+
+        assert_eq!(count, 72);
+        assert_eq!(points.len(), 72);
+        let offset = FixedOffset::east_opt(2 * 60 * 60).expect("valid CEST offset");
+        let hourly = offset
+            .with_ymd_and_hms(2026, 6, 20, 12, 0, 0)
+            .single()
+            .expect("valid hourly timestamp");
+        let first_average = offset
+            .with_ymd_and_hms(2026, 6, 21, 12, 0, 0)
+            .single()
+            .expect("valid first average timestamp");
+        let second_average = offset
+            .with_ymd_and_hms(2026, 6, 22, 12, 0, 0)
+            .single()
+            .expect("valid second average timestamp");
+        assert_eq!(points.get(&hourly), Some(&112.0));
+        assert_eq!(points.get(&first_average), Some(&230.0));
+        assert_eq!(points.get(&second_average), Some(&240.0));
+    }
+
+    #[test]
+    fn combines_three_friday_programmes_by_forecast_date() {
+        let mut points = BTreeMap::new();
+        for (date, base) in [
+            ("17.07.2026", 100),
+            ("18.07.2026", 200),
+            ("19.07.2026", 300),
+        ] {
+            let workbook =
+                synthetic_programme_workbook_with_sheet(&programme_sheet_xml(date, base, &[]));
+            parse_programme_source_bytes(&format!("Programme {date}.xlsx"), &workbook, &mut points)
+                .expect("Friday programme should parse");
+        }
+
+        assert_eq!(points.len(), 72);
+        let offset = FixedOffset::east_opt(2 * 60 * 60).expect("valid CEST offset");
+        let saturday = offset
+            .with_ymd_and_hms(2026, 7, 18, 12, 0, 0)
+            .single()
+            .expect("valid Saturday timestamp");
+        let sunday = offset
+            .with_ymd_and_hms(2026, 7, 19, 12, 0, 0)
+            .single()
+            .expect("valid Sunday timestamp");
+        assert_eq!(points.get(&saturday), Some(&212.0));
+        assert_eq!(points.get(&sunday), Some(&312.0));
+    }
+
+    #[test]
+    fn detailed_file_has_database_priority_over_an_earlier_daily_fallback() {
+        let friday = synthetic_programme_workbook_with_sheet(&programme_sheet_xml(
+            "17.07.2026",
+            100,
+            &[230],
+        ));
+        let saturday =
+            synthetic_programme_workbook_with_sheet(&programme_sheet_xml("18.07.2026", 200, &[]));
+        let mut points = BTreeMap::new();
+        let mut hourly_dates = HashSet::new();
+
+        parse_programme_source_bytes_detailed(
+            "17.07.2026.xls",
+            &friday,
+            &mut points,
+            &mut hourly_dates,
+        )
+        .expect("Friday workbook should parse");
+        parse_programme_source_bytes_detailed(
+            "18.07.2026.xls",
+            &saturday,
+            &mut points,
+            &mut hourly_dates,
+        )
+        .expect("Saturday workbook should parse");
+
+        let saturday_date = NaiveDate::from_ymd_opt(2026, 7, 18).expect("valid date");
+        assert_eq!(
+            sig_programme_source(saturday_date, &hourly_dates),
+            "sig_programme_hourly"
+        );
+        let timestamp = geneva_datetime(saturday_date, 12).expect("valid timestamp");
+        assert_eq!(points.get(&timestamp), Some(&212.0));
+    }
+
+    #[test]
+    fn pro_forecast_dates_are_tomorrow_through_day_three() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 16).expect("valid date");
+        assert!(!is_visible_forecast_date(today, today));
+        assert!(is_visible_forecast_date(
+            today,
+            NaiveDate::from_ymd_opt(2026, 7, 17).expect("valid date")
+        ));
+        assert!(is_visible_forecast_date(
+            today,
+            NaiveDate::from_ymd_opt(2026, 7, 19).expect("valid date")
+        ));
+        assert!(!is_visible_forecast_date(
+            today,
+            NaiveDate::from_ymd_opt(2026, 7, 20).expect("valid date")
+        ));
+    }
+
+    #[test]
+    #[ignore = "set RHONOMETRE_TEST_PROGRAMME_FILES to inspect real SIG workbooks"]
+    fn inspects_real_programme_files_from_env() {
+        let paths = env::var("RHONOMETRE_TEST_PROGRAMME_FILES")
+            .expect("RHONOMETRE_TEST_PROGRAMME_FILES must contain semicolon-separated paths");
+        let mut combined = BTreeMap::new();
+
+        for path in paths.split(';').filter(|path| !path.trim().is_empty()) {
+            let bytes = fs::read(path).expect("real programme workbook should be readable");
+            let mut points = BTreeMap::new();
+            let count = parse_programme_source_bytes(path, &bytes, &mut points)
+                .expect("real programme workbook should parse");
+            assert_eq!(count, points.len());
+            let first = points
+                .keys()
+                .next()
+                .expect("workbook should have a first point");
+            let last = points
+                .keys()
+                .next_back()
+                .expect("workbook should have a last point");
+            let mut distinct_values = points.values().copied().collect::<Vec<_>>();
+            distinct_values.sort_by(f64::total_cmp);
+            distinct_values.dedup_by(|left, right| left.total_cmp(right).is_eq());
+            eprintln!(
+                "{path}: {count} points, {first} to {last}, {} distinct values",
+                distinct_values.len()
+            );
+            let programme_date = first.date_naive();
+            let hourly_values = points
+                .iter()
+                .filter(|(timestamp, _)| timestamp.date_naive() == programme_date)
+                .map(|(_, value)| *value)
+                .collect::<Vec<_>>();
+            eprintln!("  {programme_date} Q Seujet 00h..23h: {hourly_values:?}");
+            let mut by_date = BTreeMap::<NaiveDate, Vec<f64>>::new();
+            for (timestamp, value) in &points {
+                by_date
+                    .entry(timestamp.date_naive())
+                    .or_default()
+                    .push(*value);
+            }
+            for (date, mut values) in by_date {
+                values.sort_by(f64::total_cmp);
+                let minimum = values.first().copied().expect("day has a minimum");
+                let maximum = values.last().copied().expect("day has a maximum");
+                values.dedup_by(|left, right| left.total_cmp(right).is_eq());
+                eprintln!(
+                    "  {date}: {} hourly points, {} distinct, {minimum:.1}..{maximum:.1} m³/s",
+                    points
+                        .keys()
+                        .filter(|timestamp| timestamp.date_naive() == date)
+                        .count(),
+                    values.len()
+                );
+            }
+            combined.extend(points);
+        }
+
+        assert!(!combined.is_empty());
+        eprintln!("combined: {} unique timestamped points", combined.len());
+    }
+
+    #[test]
     fn pro_tokens_require_valid_signature_and_expiry() {
         let state = test_state();
         let token = sign_pro_token(&state, Utc::now() + chrono::Duration::hours(1))
@@ -3384,6 +3956,71 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn imap_status_requires_ingest_token() {
+        let state = test_state();
+        let response = imap_status_handler(State(state), HeaderMap::new())
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn imap_status_reports_disabled_without_credentials() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer ingest-token".parse().expect("valid header"),
+        );
+        let response = imap_status_handler(State(state), headers)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("status body should be readable");
+        let status: ImapStatus = serde_json::from_slice(&bytes).expect("status should deserialize");
+        assert!(!status.configured);
+        assert!(!status.running);
+        assert!(status.last_error.is_none());
+    }
+
+    #[test]
+    fn imap_status_tracks_success_and_error_without_exposing_credentials() {
+        let mut status = ImapStatus {
+            configured: true,
+            running: true,
+            host: Some("mail.infomaniak.com".to_string()),
+            username: Some("debit@example.test".to_string()),
+            mailbox: Some("INBOX".to_string()),
+            ..ImapStatus::default()
+        };
+        apply_imap_poll_result(&mut status, &Ok(3), "2026-07-16T20:00:00Z".to_string());
+        assert_eq!(status.messages_ingested, 3);
+        assert_eq!(
+            status.last_success_at.as_deref(),
+            Some("2026-07-16T20:00:00Z")
+        );
+        assert!(status.last_error.is_none());
+
+        apply_imap_poll_result(
+            &mut status,
+            &Err("authentication failed".to_string()),
+            "2026-07-16T20:05:00Z".to_string(),
+        );
+        assert_eq!(status.messages_ingested, 3);
+        assert_eq!(
+            status.last_success_at.as_deref(),
+            Some("2026-07-16T20:00:00Z")
+        );
+        assert_eq!(status.last_error.as_deref(), Some("authentication failed"));
+
+        let json = serde_json::to_string(&status).expect("status should serialize");
+        assert!(!json.contains("password"));
+        assert!(!json.contains("secret"));
+    }
+
     fn test_state() -> AppState {
         AppState {
             client: Client::new(),
@@ -3392,6 +4029,7 @@ mod tests {
             ingest_token: Some("ingest-token".to_string()),
             pro_code: "pro-code".to_string(),
             token_secret: "token-secret".to_string(),
+            imap_status: Arc::new(RwLock::new(ImapStatus::default())),
         }
     }
 
@@ -3428,6 +4066,10 @@ mod tests {
     }
 
     fn synthetic_programme_workbook() -> Vec<u8> {
+        synthetic_programme_workbook_with_sheet(&sheet_xml())
+    }
+
+    fn synthetic_programme_workbook_with_sheet(sheet: &str) -> Vec<u8> {
         let cursor = IoCursor::new(Vec::new());
         let mut zip = ZipWriter::new(cursor);
 
@@ -3468,7 +4110,7 @@ mod tests {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>"#,
         );
-        add_zip_file(&mut zip, "xl/worksheets/sheet1.xml", &sheet_xml());
+        add_zip_file(&mut zip, "xl/worksheets/sheet1.xml", sheet);
 
         zip.finish().expect("zip should finish").into_inner()
     }
@@ -3508,6 +4150,55 @@ mod tests {
             label_cell = label_cell,
             date_cell = date_cell,
             values = values
+        )
+    }
+
+    fn programme_sheet_xml(date: &str, base: i32, daily_averages: &[i32]) -> String {
+        let headers = (0..24)
+            .map(|hour| {
+                let cell = format!("{}19", column_name(hour + 1));
+                inline_string_cell(&cell, &format!("{hour}h"))
+            })
+            .collect::<String>();
+        let values = (0..24)
+            .map(|hour| {
+                let cell = format!("{}20", column_name(hour + 1));
+                format!(
+                    r#"<c r="{cell}"><v>{}</v></c>"#,
+                    base + i32::try_from(hour).expect("hour fits i32")
+                )
+            })
+            .collect::<String>();
+        let daily_rows = daily_averages
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let row = 21 + index;
+                format!(
+                    r#"<row r="{row}">{}<c r="B{row}"><v>{value}</v></c>{}</row>"#,
+                    inline_string_cell(&format!("A{row}"), "Seujet débit moyen journalier"),
+                    inline_string_cell(&format!("C{row}"), "m³/s")
+                )
+            })
+            .collect::<String>();
+
+        format!(
+            concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+                r#"<sheetData>"#,
+                r#"<row r="17">{title}</row>"#,
+                r#"<row r="19">{headers}</row>"#,
+                r#"<row r="20">{label}{values}</row>"#,
+                "{daily_rows}",
+                r#"</sheetData>"#,
+                r#"</worksheet>"#
+            ),
+            headers = headers,
+            title = inline_string_cell("A17", &format!("Programme du {date}")),
+            label = inline_string_cell("A20", "Q Seujet"),
+            values = values,
+            daily_rows = daily_rows,
         )
     }
 

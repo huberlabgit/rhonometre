@@ -333,6 +333,31 @@ fn App() -> Element {
                 }
             }
 
+            if !embed_mode && focus_mode() {
+                button {
+                    class: if pro_enabled {
+                        "focus-pro-button refresh-button active"
+                    } else {
+                        "focus-pro-button refresh-button ghost"
+                    },
+                    r#type: "button",
+                    onclick: move |_| {
+                        if pro_token().is_some() {
+                            pro_token.set(None);
+                            store_pro_token(None);
+                            pro_signin_open.set(false);
+                        } else {
+                            pro_signin_open.set(!pro_signin_open());
+                        }
+                    },
+                    if pro_enabled {
+                        "PRO"
+                    } else {
+                        "Pro"
+                    }
+                }
+            }
+
             if !embed_mode {
                 div { class: "topbar",
                     div { class: "brand-lockup",
@@ -502,7 +527,13 @@ fn DashboardView(
         .collect::<Vec<_>>();
     let visible_stations = stations
         .iter()
-        .filter(|station| !focus_mode || station.kind == WaterKind::River)
+        .filter(|station| {
+            if pro_enabled {
+                station.id == "2606"
+            } else {
+                !focus_mode || station.kind == WaterKind::River
+            }
+        })
         .cloned()
         .collect::<Vec<_>>();
     let selected = visible_stations
@@ -525,7 +556,7 @@ fn DashboardView(
                 }
             }
 
-            if !focus_mode && !embed_mode {
+            if !focus_mode && !embed_mode && !pro_enabled {
                 div { class: "station-tabs station-tabs-bottom",
                     for station in stations {
                         button {
@@ -589,21 +620,23 @@ fn StationPanel(
     let hover_state = use_signal(|| None::<HoverState>);
     let domain = station_time_domain(&station, pro_enabled);
     let temperature_history = series_for_kind(&station.history, MetricKind::Temperature);
-    let temperature_forecast = if pro_enabled {
-        series_for_kind(&station.forecast, MetricKind::Temperature)
-    } else {
-        None
-    };
+    let temperature_forecast = None;
     let secondary_kind = if station.kind == WaterKind::Lake {
         MetricKind::WaterLevel
     } else {
         MetricKind::Discharge
     };
     let secondary_history = series_for_kind(&station.history, secondary_kind);
-    let secondary_forecast = if pro_enabled {
-        series_for_kind(&station.forecast, secondary_kind)
+    let secondary_forecast =
+        if pro_enabled && station.id == "2606" && secondary_kind == MetricKind::Discharge {
+            series_for_kind(&station.forecast, secondary_kind)
+        } else {
+            None
+        };
+    let panel_class = if pro_enabled && station.id == "2606" {
+        "station-panel pro-rhone"
     } else {
-        None
+        "station-panel"
     };
     let station_notice = match locale {
         Locale::Fr => station.notice_fr.clone(),
@@ -627,7 +660,16 @@ fn StationPanel(
         });
     let idle_hover_state = latest_station_timestamp(&station)
         .and_then(|timestamp| hover_state_for_timestamp(timestamp, &domain));
-    let heading_subtitle = station_metric_context(&station, locale);
+    let heading_subtitle = if pro_enabled {
+        tr(
+            locale,
+            "Débit du Rhône à la Halle de l'Île",
+            "Rhône discharge at Halle de l'Île",
+        )
+        .to_string()
+    } else {
+        station_metric_context(&station, locale)
+    };
     let now = Local::now();
     let (current_summary_date, current_summary_conditions) = current_conditions_summary(
         &now,
@@ -639,7 +681,7 @@ fn StationPanel(
     );
 
     rsx! {
-        article { class: "station-panel",
+        article { class: "{panel_class}",
             div { class: "station-heading",
                 div { class: "station-heading-title",
                     if !embed_mode {
@@ -689,36 +731,38 @@ fn StationPanel(
                     p { class: "chart-context-label", "{heading_subtitle}" }
                 }
 
-                {metric_chart(
-                    &station,
-                    MetricKind::Temperature,
-                    Some("top"),
-                    temperature_history,
-                    temperature_forecast,
-                    &domain,
-                    locale,
-                    hover_state,
-                    None,
-                    idle_hover_state,
-                    None,
-                )}
+                if !pro_enabled {
+                    {metric_chart(
+                        &station,
+                        MetricKind::Temperature,
+                        Some("top"),
+                        temperature_history,
+                        temperature_forecast,
+                        &domain,
+                        locale,
+                        hover_state,
+                        None,
+                        idle_hover_state,
+                        None,
+                    )}
 
-                {metric_readout(
-                    &station,
-                    MetricKind::Temperature,
-                    temperature_history,
-                    temperature_forecast,
-                    &domain,
-                    locale,
-                    hover_state,
-                    None,
-                    "plot-current plot-current-stacked",
-                )}
+                    {metric_readout(
+                        &station,
+                        MetricKind::Temperature,
+                        temperature_history,
+                        temperature_forecast,
+                        &domain,
+                        locale,
+                        hover_state,
+                        None,
+                        "plot-current plot-current-stacked",
+                    )}
+                }
 
                 {metric_chart(
                     &station,
                     secondary_kind,
-                    Some("bottom"),
+                    if pro_enabled { Some("top") } else { Some("bottom") },
                     secondary_history,
                     secondary_forecast,
                     &domain,
@@ -1216,10 +1260,14 @@ fn axis_title_view(kind: MetricKind, locale: Locale, unit: &str) -> Element {
     }
 }
 
-fn station_time_domain(_station: &StationData, _pro_enabled: bool) -> TimeDomain {
+fn station_time_domain(station: &StationData, pro_enabled: bool) -> TimeDomain {
     let today = Local::now().date_naive();
-    let end_date = today + Duration::days(1);
-    let start_date = end_date - Duration::days(5);
+    let (start_date, end_date) = if pro_enabled && station.id == "2606" {
+        (today - Duration::days(1), today + Duration::days(4))
+    } else {
+        let end_date = today + Duration::days(1);
+        (end_date - Duration::days(5), end_date)
+    };
     let fallback_end = Local::now() + Duration::hours(12);
     let end = local_datetime(end_date, 0, 0, 0).unwrap_or(fallback_end);
     let start = local_datetime(start_date, 0, 0, 0).unwrap_or(end - Duration::days(5));

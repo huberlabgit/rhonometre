@@ -2,7 +2,10 @@
 
 Modern water conditions dashboard for the Geneva Rhône area. The server is an Axum data hub backed by Postgres, and the client is a Dioxus app served as web assets and structured for native mobile clients using the same API.
 
-The normal dashboard shows live discharge and temperature with five-day history. Pro mode is server-authenticated and adds planned Seujet discharge forecasts from forwarded SIG programme emails.
+The normal dashboard shows live discharge and temperature with five-day history. Pro mode is
+server-authenticated and switches to a Rhône-only discharge view for Halle de l'Ile. Its five-day
+window contains yesterday, today, and the next three days. Measured discharge is red; SIG programme
+values are rendered as a translucent red forecast.
 
 ## Data Sources
 
@@ -25,17 +28,22 @@ T_2606 = (Q_2174 * T_2174 - Q_2170 * T_2170) / Q_2606
 
 The fallback temperature estimate is lagged before applying the heat balance: Chancy is downstream of the Jonction, so the server estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed fallback `2606` temperature timestamp is therefore the estimated time when that water passed Halle de l'Ile.
 
-Pro forecasts prefer stored SIG "Programme débit" points for `2606`. Hydrodaten forecasts are used only when no SIG programme exists.
-The dashboard also fetches Geneva air temperature from Open-Meteo. Pro mode overlays that air-temperature series on the water-temperature plot.
+Pro forecasts use only stored SIG "Programme débit" points for `2606`; Hydrodaten forecasts are
+not substituted. The parser reads hourly `Q Seujet` values and dates found in attachment names,
+email subjects, title rows, or near the programme row. A `Seujet débit moyen journalier` value is
+expanded into a horizontal daily estimate for each subsequent day. If several dated files arrive
+together, as on Fridays, their hourly `Q Seujet` values are combined by date and take precedence
+over daily-average fallback values.
+
+The dashboard also fetches Geneva air temperature from Open-Meteo for the normal current-conditions
+summary. It is not plotted in Pro mode.
 
 Hydrodaten endpoints used by the server:
 
 - Current discharge and water level: `https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_pq.geojson`
 - Current water temperature: `https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_temperature.geojson`
-- Forecast station overview: `https://www.hydrodaten.admin.ch/web-hydro-maps/hydro_sensor_pq_forecast.geojson`
 - Historical discharge/water level: `https://www.hydrodaten.admin.ch/plots/p_q_7days/{station}_p_q_7days_de.json`
 - Historical water temperature: `https://www.hydrodaten.admin.ch/plots/temperature_7days/{station}_temperature_7days_de.json`
-- Discharge forecast: `https://www.hydrodaten.admin.ch/plots/q_forecast/{station}_q_forecast_de.json`
 
 ## Server API
 
@@ -44,6 +52,7 @@ Hydrodaten endpoints used by the server:
 - `GET /api/v1/stations/:id/series?from=&to=&forecast=true`
 - `POST /api/v1/auth/pro`
 - `POST /api/admin/email-ingest`
+- `GET /api/admin/imap-status`
 
 `/api/v1/dashboard` strips forecasts unless the request includes a valid pro bearer token. `/api/v1/stations/:id/series?forecast=true` also requires pro authorization.
 
@@ -55,7 +64,38 @@ Email ingest is protected by:
 Authorization: Bearer $RHONOMETRE_INGEST_TOKEN
 ```
 
-The body may be raw RFC822 MIME, multipart uploaded `.eml`, or uploaded `.xls`. The server extracts attached Excel workbooks, reads hourly `Q Seujet` points, and upserts them idempotently as `2606` discharge forecasts from source `sig_programme`. Raw emails are not retained by default; Postgres stores only message hash, received time, subject, attachment names, parsed point count, warnings, and normalized series points.
+The body may be raw RFC822 MIME, multipart uploaded `.eml`, or uploaded `.xls`/`.xlsx`. The
+server extracts attached Excel workbooks, reads hourly `Q Seujet` and daily-average points, and
+upserts them idempotently as `2606` discharge forecasts. PostgreSQL stores detailed dates as
+`sig_programme_hourly` and fallback dates as `sig_programme_daily`, so an hourly curve always
+wins regardless of email arrival order. Raw emails are not retained by default; Postgres stores
+only message hash, received time, subject, attachment names, parsed point count, warnings, and
+normalized series points.
+
+Do not share the password for `debit@pontonniers-geneve.ch`. The direct Infomaniak IMAP setup
+described below is the simplest production option. A webhook provider such as Mailgun, SendGrid
+Inbound Parse, or a Cloudflare Email Worker remains an alternative; it must POST the raw RFC822
+message to `https://<rhonometre-host>/api/admin/email-ingest` with:
+
+```http
+Authorization: Bearer $RHONOMETRE_INGEST_TOKEN
+Content-Type: message/rfc822
+```
+
+The application also includes an optional IMAP poller for Infomaniak. Configure
+`RHONOMETRE_IMAP_USERNAME=debit@pontonniers-geneve.ch` and
+`RHONOMETRE_IMAP_PASSWORD=<generated mailbox password>`. It uses TLS on
+`mail.infomaniak.com:993`, processes unseen messages, periodically checks the 50 most recent
+messages so a manually opened email is not missed, and marks messages as seen only after
+successful PostgreSQL ingestion. Content hashes make repeat scans idempotent. Never place a
+mailbox password in Git or in the frontend.
+
+The protected status endpoint uses the same ingest bearer token:
+
+```sh
+curl -H "Authorization: Bearer $RHONOMETRE_INGEST_TOKEN" \
+  https://<rhonometre-host>/api/admin/imap-status
+```
 
 ## Development
 
@@ -192,13 +232,13 @@ Before importing the JPS package, publish a pullable image. The GitHub Actions w
 in `.github/workflows/docker.yml` publishes:
 
 ```sh
-ghcr.io/lcnbr/rhonometre:latest
+ghcr.io/huberlabgit/rhonometre:latest
 ```
 
 Import URL after pushing these files:
 
 ```text
-https://raw.githubusercontent.com/lcnbr/rhonometre/main/deploy/jelastic/rhonometre.jps
+https://raw.githubusercontent.com/huberlabgit/rhonometre/main/deploy/jelastic/rhonometre.jps
 ```
 
 See `deploy/jelastic/README.md` for the full pre-install checklist.
