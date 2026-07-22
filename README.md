@@ -1,10 +1,10 @@
-# rhonometre
+# rhônomètre
 
 Modern water conditions dashboard for the Geneva Rhône area. The server is an Axum data hub backed by Postgres, and the client is a Dioxus app served as web assets and structured for native mobile clients using the same API.
 
 The normal dashboard shows live discharge and temperature with five-day history. Pro mode is
-server-authenticated and switches to a Rhône-only discharge view for Halle de l'Ile. Its five-day
-window contains yesterday, today, and the next three days. Measured discharge is red; SIG programme
+server-authenticated and switches to a Rhône-only discharge view for Halle de l'Île. Its five-day
+window contains yesterday, today, and the next three days. Measured discharge is blue; SIG programme
 values are rendered as a translucent red forecast.
 
 ## Data Sources
@@ -12,21 +12,21 @@ values are rendered as a translucent red forecast.
 Default stations:
 
 - Arve - Genève, Bout du Monde (`2170`)
-- Rhône - Genève, Halle de l'Ile (`2606`, measured when Hydrodaten is online, estimated fallback otherwise)
+- Rhône - Genève, Halle de l'Île (`2606`, measured when Hydrodaten is online, estimated fallback otherwise)
 - Lac Léman (`2028` level at Genève-Sécheron, paired in the non-focus dashboard with
-  the `2606` lake-outflow temperature at Halle de l'Ile)
+  the `2606` lake-outflow temperature at Halle de l'Île)
 - Rhône - Chancy, Aux Ripes (`2174`, downstream/post-Jonction Rhône reference)
 
-The UI currently shows Arve, Halle de l'Ile, and Chancy tabs. Water level is stored when Hydrodaten exposes it, but the client does not render it.
+The non-focus UI shows Arve, Halle de l'Île, Lac Léman, and Chancy tabs.
 
-The server prefers measured Hydrodaten data for Rhône - Genève, Halle de l'Ile (`2606`). If the station is unavailable or incomplete, the app derives `2606` from Arve (`2170`) and downstream Rhône at Chancy (`2174`):
+The server prefers measured Hydrodaten data for Rhône - Genève, Halle de l'Île (`2606`). If the station is unavailable or incomplete, the app derives `2606` from Arve (`2170`) and downstream Rhône at Chancy (`2174`):
 
 ```text
 Q_2606 = Q_2174 - Q_2170
 T_2606 = (Q_2174 * T_2174 - Q_2170 * T_2170) / Q_2606
 ```
 
-The fallback temperature estimate is lagged before applying the heat balance: Chancy is downstream of the Jonction, so the server estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed fallback `2606` temperature timestamp is therefore the estimated time when that water passed Halle de l'Ile.
+The fallback temperature estimate is lagged before applying the heat balance: Chancy is downstream of the Jonction, so the server estimates travel time from discharge/current and samples Arve/Rhône terms at the corresponding upstream times. The displayed fallback `2606` temperature timestamp is therefore the estimated time when that water passed Halle de l'Île.
 
 Pro forecasts use only stored SIG "Programme débit" points for `2606`; Hydrodaten forecasts are
 not substituted. The parser reads hourly `Q Seujet` values and dates found in attachment names,
@@ -224,7 +224,7 @@ The container builds the Axum server and Dioxus web assets, listens on `0.0.0.0:
 and serves the frontend from `/app/dist`.
 
 The repo also includes a Jelastic import package at
-`deploy/jelastic/rhonometre.jps`. It creates one rhonometre app container and one
+`deploy/jelastic/rhonometre.jps`. It creates one rhônomètre app container and one
 PostgreSQL container, but it does not create resources until it is imported and installed
 from the Jelastic dashboard.
 
@@ -258,7 +258,7 @@ If you need an amd64 image from Apple Silicon, set
 
 Recommended Jelastic topology:
 
-- One Docker/custom application node using the published rhonometre image.
+- One Docker/custom application node using the published rhônomètre image.
 - One PostgreSQL node, either from the included JPS Docker PostgreSQL container or a managed Jelastic/Infomaniak PostgreSQL node wired through `DATABASE_URL`.
 - Public HTTPS routing to the application node's HTTP port.
 

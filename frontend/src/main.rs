@@ -328,6 +328,7 @@ fn App() -> Element {
                         let next = !focus_mode();
                         focus_mode.set(next);
                         store_focus_mode(next);
+                        update_view_url(next, &selected_station());
                     },
                     FocusIcon { active: focus_mode() }
                 }
@@ -490,7 +491,7 @@ fn App() -> Element {
                 div { class: "focus-corner-marks",
                     a {
                         class: "focus-corner-qr",
-                        href: "https://www.pontonniers-geneve.ch",
+                        href: "https://rhonometre.pontonniers-geneve.ch/?mode=dashboard&station=2606",
                         role: "img",
                         aria_label: "QR code Pontonnier·ère·s de Genève",
                         ""
@@ -564,6 +565,7 @@ fn DashboardView(
                             r#type: "button",
                             onclick: move |_| {
                                 selected_station.set(station.id.clone());
+                                update_view_url(false, &station.id);
                                 scroll_page_to_top();
                             },
                             strong { "{station_title(&station, locale)}" }
@@ -649,14 +651,14 @@ fn StationPanel(
     let measurement_readout = hover_state()
         .map(|hover| {
             (
-                tr(locale, "Mesure à:", "Measurement at:").to_string(),
+                tr(locale, "Mesure à :", "Measurement at:").to_string(),
                 format_timestamp_from_seconds(hover.timestamp, locale),
             )
         })
         .or_else(|| {
             latest_measurement.clone().map(|timestamp| {
                 (
-                    tr(locale, "Dernière mesure:", "Latest measurement:").to_string(),
+                    tr(locale, "Dernière mesure :", "Latest measurement:").to_string(),
                     timestamp,
                 )
             })
@@ -705,7 +707,7 @@ fn StationPanel(
                         }
                     } else if embed_mode {
                         h2 { class: "station-embed-title",
-                            span { class: "station-app-word", "rhonoscope" }
+                            span { class: "station-app-word", "{app_title(locale)}" }
                             span { class: "station-embed-brand",
                                 span { class: "station-brand-copy",
                                     "par les"
@@ -2173,7 +2175,30 @@ fn store_pro_token(token: Option<&str>) {
 }
 
 fn initial_focus_mode() -> bool {
-    true
+    !matches!(
+        query_param("mode")
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("dashboard" | "normal" | "overview")
+    )
+}
+
+fn update_view_url(focus_mode: bool, station: &str) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(window) = web_sys::window() {
+        let target = if focus_mode {
+            "/".to_string()
+        } else {
+            format!("/?mode=dashboard&station={station}")
+        };
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&target));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (focus_mode, station);
 }
 
 fn store_focus_mode(enabled: bool) {
@@ -2202,8 +2227,8 @@ fn tr<'a>(locale: Locale, fr: &'a str, en: &'a str) -> &'a str {
     }
 }
 
-fn app_title(locale: Locale) -> &'static str {
-    tr(locale, "rhonometre", "rhonometer")
+fn app_title(_locale: Locale) -> &'static str {
+    "rhônomètre"
 }
 
 fn station_matches(station: &StationData, requested: &str) -> bool {
@@ -2569,16 +2594,16 @@ fn safety_label(station: &StationData, safety: DischargeSafety, locale: Locale) 
             (DischargeSafety::Safe, Locale::En) => "Weak current",
             (DischargeSafety::Risky, Locale::Fr) => "Courant fort",
             (DischargeSafety::Risky, Locale::En) => "Strong current",
-            (DischargeSafety::NoSwim, Locale::Fr) => "Attention courant très fort!",
+            (DischargeSafety::NoSwim, Locale::Fr) => "Attention : courant très fort !",
             (DischargeSafety::NoSwim, Locale::En) => "Warning! Very strong current!",
         };
     }
     match (safety, locale) {
         (DischargeSafety::Safe, Locale::Fr) => "Courant lent",
         (DischargeSafety::Safe, Locale::En) => "Slow current",
-        (DischargeSafety::Risky, Locale::Fr) => "Attention courant fort",
+        (DischargeSafety::Risky, Locale::Fr) => "Attention : courant fort",
         (DischargeSafety::Risky, Locale::En) => "Strong current",
-        (DischargeSafety::NoSwim, Locale::Fr) => "Danger! Courant très fort!",
+        (DischargeSafety::NoSwim, Locale::Fr) => "Danger ! Courant très fort !",
         (DischargeSafety::NoSwim, Locale::En) => "Danger! Very strong current!",
     }
 }

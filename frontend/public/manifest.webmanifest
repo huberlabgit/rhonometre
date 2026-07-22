@@ -1,6 +1,6 @@
 {
-  "name": "rhonometre",
-  "short_name": "rhonometre",
+  "name": "rhônomètre",
+  "short_name": "rhônomètre",
   "description": "Température et débit du Rhône avant la Jonction à Genève.",
   "start_url": "/",
   "scope": "/",

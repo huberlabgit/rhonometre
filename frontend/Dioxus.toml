@@ -4,7 +4,7 @@ out_dir = "dist"
 asset_dir = "public"
 
 [web.app]
-title = "rhonometre"
+title = "rhônomètre"
 
 [web.watcher]
 reload_html = true
@@ -26,4 +26,4 @@ identifier = "ch.huberlab.rhonometre"
 publisher = "huberlab"
 category = "Weather"
 short_description = "Geneva river current and temperature dashboard"
-long_description = "rhonometre shows live Rhône and Arve discharge and water temperature, with server-backed pro forecasts."
+long_description = "rhônomètre shows live Rhône and Arve discharge and water temperature, with server-backed pro forecasts."

@@ -118,8 +118,8 @@ const SOURCE_STATIONS: &[StationConfig] = &[
 const HALLE_ILE_STATION: StationConfig = StationConfig {
     id: "2606",
     slug: "rhone-halle-ile",
-    name_fr: "Rhône - Genève, Halle de l'Ile",
-    name_en: "Rhône - Geneva, Halle de l'Ile",
+    name_fr: "Rhône - Genève, Halle de l'Île",
+    name_en: "Rhône - Geneva, Halle de l'Île",
     role_fr: "Rhône avant la Jonction",
     role_en: "Rhône before Jonction",
     kind: WaterKind::River,
@@ -128,8 +128,8 @@ const HALLE_ILE_STATION: StationConfig = StationConfig {
 const DERIVED_HALLE_ILE_STATION: StationConfig = StationConfig {
     id: "2606",
     slug: "rhone-halle-ile",
-    name_fr: "Rhône - Genève, Halle de l'Ile",
-    name_en: "Rhône - Geneva, Halle de l'Ile",
+    name_fr: "Rhône - Genève, Halle de l'Île",
+    name_en: "Rhône - Geneva, Halle de l'Île",
     role_fr: "Rhône avant la Jonction",
     role_en: "Rhône before Jonction",
     kind: WaterKind::River,
@@ -1376,7 +1376,7 @@ async fn fetch_dashboard(
             Err(err) => {
                 warn!(error = %err, "failed to calibrate derived 2606 temperature");
                 warnings.push(format!(
-                    "Could not calibrate the Rhône - Genève, Halle de l'Ile temperature estimate: {err}"
+                    "Could not calibrate the Rhône - Genève, Halle de l'Île temperature estimate: {err}"
                 ));
                 None
             }
@@ -1389,7 +1389,7 @@ async fn fetch_dashboard(
         ) {
             Some(station) => stations.insert(1, station),
             None => warnings.push(
-                "Could not derive Rhône - Genève, Halle de l'Ile from Arve and Chancy data"
+                "Could not derive Rhône - Genève, Halle de l'Île from Arve and Chancy data"
                     .to_string(),
             ),
         }
@@ -1409,12 +1409,6 @@ async fn fetch_dashboard(
         url: "https://www.hydrodaten.admin.ch/de/seen-und-fluesse/messstationen-zustand"
             .to_string(),
     }];
-    if programme_forecasts.has_data() {
-        sources.push(SourceInfo {
-            label: "SIG discharge programme emails".to_string(),
-            url: String::new(),
-        });
-    }
     if let Some(air_temperature) = air_temperature.as_ref() {
         sources.push(air_temperature.source.clone());
     }

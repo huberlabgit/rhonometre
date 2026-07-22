@@ -9,7 +9,7 @@
   <image xlink:href="rhone-background.jpg" width="1200" height="904" y="-137" preserveAspectRatio="xMidYMid slice" />
   <rect width="1200" height="630" fill="url(#shade)" />
   <g fill="#ffffff" font-family="Calibri, Carlito, Arial, sans-serif">
-    <text x="76" y="244" font-size="118" font-weight="700">rhonometre</text>
+    <text x="76" y="244" font-size="118" font-weight="700">rhônomètre</text>
     <text x="80" y="312" font-size="44" font-weight="700">Pontonnier·ère·s de Genève</text>
     <line x1="80" y1="357" x2="690" y2="357" stroke="#ffffff" stroke-width="3" opacity="0.78" />
     <text x="80" y="417" font-size="34" font-weight="600">Température et débit du Rhône</text>
