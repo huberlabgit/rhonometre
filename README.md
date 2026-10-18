@@ -121,6 +121,30 @@ Single-station iframe/embed URLs use the same app bundle:
 ></iframe>
 ```
 
+To reuse the host page's background photograph, add `background=transparent`.
+For embedding on the club website, `branding=0` also hides the repeated app title,
+club name, and logo; the station label and charts remain visible:
+
+```html
+<iframe
+  src="https://rhonometre.pontonniers-geneve.ch/?embed=1&station=2606&background=transparent&branding=0"
+  title="Rhônomètre — Rhône avant la Jonction"
+  width="100%"
+  height="760"
+  loading="lazy"
+  style="border: 0; background: transparent"
+></iframe>
+```
+
+Embedded dashboards send `{type: "rhonometre:resize", height}` messages to their
+parent when their content changes size. Before applying the height, the host must
+check both `event.source === iframe.contentWindow` and
+`event.origin === new URL(iframe.src).origin`. The message contains only a pixel
+height, never readings, tokens, or authentication information.
+
+Both options only apply in embed mode. Existing embeds keep their own photograph,
+and the normal application keeps its existing background.
+
 `station` accepts either the Hydrodaten id (`2170`, `2606`, `2174`) or the station slug (`arve-bout-du-monde`, `rhone-halle-ile`, `rhone-chancy`). `?embed=2606` is a shorthand for the default French embed, and `lang=en` switches the labels to English.
 
 For a local Postgres-backed run:
