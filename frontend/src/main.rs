@@ -18,6 +18,9 @@ const SUNRISE_SUNSET_ZENITH_DEGREES: f64 = 90.833;
 #[cfg(target_arch = "wasm32")]
 const PRO_TOKEN_STORAGE_KEY: &str = "rhonometre_pro_token";
 const APP_CSS: &str = include_str!("styles.css");
+const TRANSPARENT_EMBED_CSS: &str = "html, body { background: transparent !important; } html, body, #app { min-height: 0; } .app-shell.embed-mode .station-panel { min-height: 0; padding: 0; }";
+const EMBED_JS: &str = include_str!("embed.js");
+const UNBRANDED_EMBED_CSS: &str = ".app-shell.embed-mode .station-heading { display: none; }";
 
 fn main() {
     #[cfg(target_arch = "wasm32")]
@@ -242,6 +245,9 @@ struct EmbedConfig {
 fn App() -> Element {
     let embed_config = initial_embed_config();
     let embed_mode = embed_config.is_some();
+    let transparent_embed =
+        embed_mode && query_param("background").as_deref() == Some("transparent");
+    let unbranded_embed = embed_mode && query_param("branding").as_deref() == Some("0");
     let initial_station = initial_station_id(embed_config.as_ref());
     let mut locale = use_signal(initial_locale);
     let selected_station = use_signal(move || initial_station.clone());
@@ -305,6 +311,15 @@ fn App() -> Element {
 
     rsx! {
         document::Style { "{APP_CSS}" }
+        if transparent_embed {
+            document::Style { "{TRANSPARENT_EMBED_CSS}" }
+        }
+        if unbranded_embed {
+            document::Style { "{UNBRANDED_EMBED_CSS}" }
+        }
+        if embed_mode {
+            document::Script { "{EMBED_JS}" }
+        }
 
         div { class: "{app_class}",
             if !embed_mode {
